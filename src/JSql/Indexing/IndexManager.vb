@@ -189,10 +189,24 @@ Namespace Indexing
                 Return False
             End If
 
-            ' the archived maps are only valid for the exact row set they were built from
-            If archive.rowCount <> rowCount Then
+            ' the archived maps are only valid for the exact row set they were built from,
+            ' an UPDATE keeps the row count unchanged so the column content snapshot is
+            ' compared here as well.
+            If archive.rowCount <> rowCount OrElse archive.documents Is Nothing Then
                 Return False
             End If
+
+            Dim current As String() = memory.ColumnText(columnIndex.Column)
+
+            If current.Length <> archive.documents.Count Then
+                Return False
+            End If
+
+            For i As Integer = 0 To current.Length - 1
+                If Not String.Equals(current(i), archive.documents(i), StringComparison.Ordinal) Then
+                    Return False
+                End If
+            Next
 
             Dim documentMaps As New Dictionary(Of Integer, Integer)()
 
