@@ -32,6 +32,11 @@ Namespace Indexing
         Public Property Database As String
         Public Property Table As String
         Public Property Indexes As New List(Of ColumnIndexInfo)
+        ''' <summary>
+        ''' the archived index data of each column, used to restore the search index
+        ''' from disk instead of re-indexing the whole table on every startup.
+        ''' </summary>
+        Public Property Archives As New Dictionary(Of String, IndexArchive)(StringComparer.OrdinalIgnoreCase)
 
         Public Function FindByName(name As String) As ColumnIndexInfo
             For Each index In Indexes
@@ -106,6 +111,10 @@ Namespace Indexing
                     .Kind = ParseKind(archive.kind),
                     .ValueType = archive.valueType
                 })
+
+                If archive.column IsNot Nothing Then
+                    sets.Archives(archive.column) = archive
+                End If
             Next
 
             indexSets(key) = sets
@@ -140,7 +149,9 @@ Namespace Indexing
             For Each columnIndex In sets.Indexes
                 Select Case columnIndex.Kind
                     Case IndexKind.Hash
-                        Call memory.BuildHash(columnIndex.Column)
+                        If Not RestoreHashIndex(memory, sets, columnIndex, stored.Rows.Count) Then
+                            Call memory.BuildHash(columnIndex.Column)
+                        End If
                     Case IndexKind.Range
                         Call memory.BuildRange(columnIndex.Column, RangeType(columnIndex.ValueType))
                     Case IndexKind.FullText
@@ -160,6 +171,43 @@ Namespace Indexing
                 Case "Date", "DateTime" : Return GetType(Date)
                 Case Else : Throw New SqlError("unknown range index value type: " & valueType)
             End Select
+        End Function
+
+        ''' <summary>
+        ''' rebuild a term hash index from its archived maps instead of re-indexing the
+        ''' whole table. returns false when the archive is missing or out of date.
+        ''' </summary>
+        Private Shared Function RestoreHashIndex(memory As JsonMemoryIndex, sets As TableIndexSet,
+                                                columnIndex As ColumnIndexInfo, rowCount As Integer) As Boolean
+            Dim archive As IndexArchive = Nothing
+
+            If Not sets.Archives.TryGetValue(columnIndex.Column, archive) Then
+                Return False
+            End If
+
+            If archive Is Nothing OrElse archive.hashMaps Is Nothing OrElse archive.documentMaps Is Nothing Then
+                Return False
+            End If
+
+            ' the archived maps are only valid for the exact row set they were built from
+            If archive.rowCount <> rowCount Then
+                Return False
+            End If
+
+            Dim documentMaps As New Dictionary(Of Integer, Integer)()
+
+            For Each kv In archive.documentMaps
+                documentMaps(kv.Key) = kv.Value
+            Next
+
+            Dim hashMaps As New Dictionary(Of String, Integer())()
+
+            For Each kv In archive.hashMaps
+                hashMaps(kv.Key) = kv.Value
+            Next
+
+            memory.RestoreTermIndex(columnIndex.Column, New TermHashIndex(New InMemoryDocuments(), documentMaps, hashMaps))
+            Return True
         End Function
 
         ''' <summary>the persisted name of the clr type of a range index</summary>
@@ -244,6 +292,10 @@ Namespace Indexing
                 archive.documentMaps = memory.TermIndex(columnIndex.Column).GetDocumentMaps()
             End If
 
+            ' refresh the in-memory archive cache so that a later restore never
+            ' brings back an out of date index
+            GetIndexSet(db, table).Archives(columnIndex.Column) = archive
+
             Return IndexPersistence.Save(archive, dbDir)
         End Function
 
@@ -327,6 +379,12 @@ Namespace Indexing
 
             Try
                 Dim hits As Integer() = EnsureBuilt(db, table, stored).SelectRowOffsets(queries)
+
+                If Environment.GetEnvironmentVariable("JSQL_DEBUG_INDEX") = "1" Then
+                    Console.Error.WriteLine("[index] queries=" & queries.Count & " rows=" & stored.Rows.Count &
+                                            " hits=" & If(hits Is Nothing, "nothing", hits.Length.ToString()) &
+                                            " -> " & String.Join(",", hits.Select(Function(i) i.ToString()).ToArray()))
+                End If
 
                 If hits Is Nothing Then
                     Return New Integer() {}
