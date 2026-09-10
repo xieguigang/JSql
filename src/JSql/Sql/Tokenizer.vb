@@ -90,7 +90,10 @@ Namespace Sql
             Do While pos < sql.Length
                 Dim c As Char = sql(pos)
 
-                If Char.IsWhiteSpace(c) Then
+                If c = ChrW(&HFEFF) OrElse c = ChrW(&H200B) Then
+                    ' skip the utf8 byte order mark and zero width spaces
+                    pos += 1
+                ElseIf Char.IsWhiteSpace(c) Then
                     pos += 1
                 ElseIf c = "-"c AndAlso pos + 1 < sql.Length AndAlso sql(pos + 1) = "-"c Then
                     Do While pos < sql.Length AndAlso sql(pos) <> ControlChars.Lf

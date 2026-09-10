@@ -34,7 +34,7 @@ Module Program
         Dim engine As New SqlEngine(root)
 
         Console.OutputEncoding = New UTF8Encoding(False)
-        Console.WriteLine("JSql 0.1 - an experimental sqlText engine over json files")
+        Console.WriteLine("JSql 0.1 - an experimental sql engine over json files")
         Console.WriteLine("data root: " & root)
         Console.WriteLine("type 'help' for the meta commands, 'quit' to leave.")
         Console.WriteLine()
@@ -126,7 +126,7 @@ Module Program
             Next
         Catch ex As SqlError
             Console.ForegroundColor = ConsoleColor.Red
-            Console.WriteLine("sqlText error: " & ex.Message)
+            Console.WriteLine("sql error: " & ex.Message)
             Console.ResetColor()
         Catch ex As Exception
             Console.ForegroundColor = ConsoleColor.Red

@@ -12,7 +12,15 @@ Namespace Storage
         ''' normalize a mysql type name into one of the canonical type names.
         ''' </summary>
         Public Function NormalizeType(typeName As String) As String
-            Dim t As String = If(typeName, "").Trim.ToLower
+            Dim raw As String = If(typeName, "").Trim
+            ' strip the type arguments: VARCHAR(50) -> VARCHAR
+            Dim p As Integer = raw.IndexOf("("c)
+
+            If p > 0 Then
+                raw = raw.Substring(0, p).Trim()
+            End If
+
+            Dim t As String = raw.ToLower
 
             Select Case t
                 Case "int", "integer", "bigint", "smallint", "tinyint", "mediumint"
