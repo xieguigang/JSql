@@ -345,7 +345,94 @@
             Return ParseComparison()
         End Function
 
-        ' EXPRESSION PARSING 2
+        Private Function ParseComparison() As Expression
+            Dim left As Expression = ParseAdditive()
+
+            Do
+                Dim t As Token = tokens(p)
+                Dim op As BinaryOp? = Nothing
+
+                If t.Kind = TokenKind.Symbol Then
+                    Select Case t.Text
+                        Case "=" : op = BinaryOp.Eq
+                        Case "<>", "!=" : op = BinaryOp.Ne
+                        Case "<" : op = BinaryOp.Lt
+                        Case "<=" : op = BinaryOp.Le
+                        Case ">" : op = BinaryOp.Gt
+                        Case ">=" : op = BinaryOp.Ge
+                    End Select
+                End If
+
+                If op Is Nothing Then
+                    Exit Do
+                End If
+
+                p += 1
+
+                left = New BinaryExpression With {.Op = op.Value, .Left = left, .Right = ParseAdditive()}
+            Loop
+
+            Return ParsePredicateSuffix(left)
+        End Function
+
+        Private Function ParsePredicateSuffix(left As Expression) As Expression
+            Dim t As Token = tokens(p)
+            Dim negated As Boolean = False
+
+            ' MySQL supports a leading NOT: IS NOT NULL, NOT IN, NOT BETWEEN, NOT LIKE
+            If t.IsKeyword("IS") Then
+                p += 1
+
+                Dim neg As Boolean = AcceptKeyword("NOT")
+                ExpectKeyword("NULL")
+
+                Return New IsNullExpression With {.Operand = left, .Negated = neg}
+            End If
+
+            If t.IsKeyword("IN") Then
+                p += 1
+                Return New InExpression With {.Operand = left, .Values = ParseExpressionList(), .Negated = False}
+            End If
+
+            If t.IsKeyword("LIKE") Then
+                p += 1
+                Return New LikeExpression With {.Operand = left, .Pattern = ParseAdditive(), .Negated = False}
+            End If
+
+            If t.IsKeyword("BETWEEN") Then
+                p += 1
+
+                Dim low As Expression = ParseAdditive()
+                ExpectKeyword("AND")
+
+                Return New BetweenExpression With {.Operand = left, .Low = low, .High = ParseAdditive(), .Negated = False}
+            End If
+
+            If t.IsKeyword("NOT") AndAlso
+               (tokens(p + 1).IsKeyword("IN") OrElse tokens(p + 1).IsKeyword("LIKE") OrElse tokens(p + 1).IsKeyword("BETWEEN")) Then
+                p += 1
+                negated = True
+
+                If tokens(p).IsKeyword("IN") Then
+                    p += 1
+                    Return New InExpression With {.Operand = left, .Values = ParseExpressionList(), .Negated = True}
+                ElseIf tokens(p).IsKeyword("LIKE") Then
+                    p += 1
+                    Return New LikeExpression With {.Operand = left, .Pattern = ParseAdditive(), .Negated = True}
+                Else
+                    p += 1
+
+                    Dim low As Expression = ParseAdditive()
+                    ExpectKeyword("AND")
+
+                    Return New BetweenExpression With {.Operand = left, .Low = low, .High = ParseAdditive(), .Negated = True}
+                End If
+            End If
+
+            Return left
+        End Function
+
+        ' ARITHMETIC PARSING
 
     End Class
 End Namespace
