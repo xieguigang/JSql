@@ -109,6 +109,10 @@ Namespace Sql
         Public Property OnColumn As String
         ''' <summary>for CREATE INDEX: HASH / RANGE(BTREE) / FULLTEXT, nothing = auto pick</summary>
         Public Property IndexKind As String
+        ''' <summary>for CREATE TABLE: the table level COMMENT='text' option</summary>
+        Public Property TableComment As String
+        ''' <summary>for CREATE TABLE: the table level PRIMARY KEY/UNIQUE KEY/KEY definitions</summary>
+        Public Property Keys As New List(Of TableKeyInfo)
     End Class
 
     Public Enum DropKind

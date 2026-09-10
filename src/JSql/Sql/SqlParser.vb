@@ -732,9 +732,9 @@ Namespace Sql
             stmt.Name = ExpectIdentifier()
 
             If stmt.Kind = CreateKind.Table Then
-                stmt.Columns = ParseColumnDefinitions()
-                ' optional table options are skipped
-                SkipTrailingOptions()
+                stmt.Columns = ParseColumnDefinitions(stmt.Keys)
+                ' ENGINE=..., CHARSET=... are ignored, COMMENT='...' is kept
+                ParseTableOptions(stmt)
             ElseIf stmt.Kind = CreateKind.Index Then
                 ExpectKeyword("ON")
                 stmt.OnTable = ExpectIdentifier()

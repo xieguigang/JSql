@@ -81,6 +81,13 @@ Namespace Storage
                     Else
                         Dim s As String = Convert.ToString(value).Trim
                         If s.Length = 0 Then Return Nothing
+
+                        ' mysql: DEFAULT CURRENT_TIMESTAMP resolves at insert time
+                        If s.Equals("CURRENT_TIMESTAMP", StringComparison.OrdinalIgnoreCase) OrElse
+                           s.Equals("NOW()", StringComparison.OrdinalIgnoreCase) Then
+                            Return FormatDate(DateTime.Now, canonicalType)
+                        End If
+
                         Return FormatDate(CDate(s), canonicalType)
                     End If
                 Case "BOOLEAN"
@@ -130,6 +137,25 @@ Namespace Storage
         End Function
     End Module
 
+    ''' <summary>
+    ''' a table level key definition: PRIMARY KEY / UNIQUE KEY / KEY as declared
+    ''' inside the CREATE TABLE statement. this is metadata only, the physical
+    ''' search index files are still managed through the CREATE INDEX statement.
+    ''' </summary>
+    Public Class TableKeyInfo
+
+        Public Property Name As String
+        Public Property Columns As New List(Of String)
+        Public Property Unique As Boolean
+        Public Property Primary As Boolean
+
+        Public ReadOnly Property KeyText As String
+            Get
+                Return If(Primary, "PRIMARY", If(Unique, "UNIQUE", "KEY"))
+            End Get
+        End Property
+    End Class
+
     Public Class ColumnDef
         Public Property Name As String
         ''' <summary>canonical type name, one of INT/DOUBLE/VARCHAR/DATE/DATETIME/BOOLEAN</summary>
@@ -139,11 +165,17 @@ Namespace Storage
         Public Property NotNull As Boolean
         Public Property PrimaryKey As Boolean
         Public Property DefaultValue As Object
+        ''' <summary>the mysql column comment: COMMENT 'text'</summary>
+        Public Property Comment As String
     End Class
 
     Public Class TableSchema
         Public Property TableName As String
         Public Property Columns As New List(Of ColumnDef)
+        ''' <summary>the mysql table comment: COMMENT='text'</summary>
+        Public Property Comment As String
+        ''' <summary>table level key definitions declared inside CREATE TABLE</summary>
+        Public Property Keys As New List(Of TableKeyInfo)
 
         Public Function FindColumn(name As String) As ColumnDef
             Return Columns.Where(Function(c) String.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)).FirstOrDefault
@@ -154,7 +186,11 @@ Namespace Storage
         End Function
 
         Public Function Clone() As TableSchema
-            Dim copy As New TableSchema With {.TableName = TableName}
+            Dim copy As New TableSchema With {
+                .TableName = TableName,
+                .Comment = Comment
+            }
+
             For Each col In Columns
                 copy.Columns.Add(New ColumnDef With {
                     .Name = col.Name,
@@ -162,9 +198,22 @@ Namespace Storage
                     .RawType = col.RawType,
                     .NotNull = col.NotNull,
                     .PrimaryKey = col.PrimaryKey,
-                    .DefaultValue = col.DefaultValue
+                    .DefaultValue = col.DefaultValue,
+                    .Comment = col.Comment
                 })
             Next
+
+            For Each key In Keys
+                Dim keyCopy As New TableKeyInfo With {
+                    .Name = key.Name,
+                    .Unique = key.Unique,
+                    .Primary = key.Primary
+                }
+
+                keyCopy.Columns.AddRange(key.Columns)
+                copy.Keys.Add(keyCopy)
+            Next
+
             Return copy
         End Function
     End Class
