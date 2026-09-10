@@ -750,7 +750,7 @@ Namespace Sql
             Return stmt
         End Function
 
-        Private Function ParseColumnDefinitions() As List(Of ColumnDef)
+        Private Function ParseColumnDefinitions(keys As List(Of TableKeyInfo)) As List(Of ColumnDef)
             ExpectSymbol("(")
 
             Dim cols As New List(Of ColumnDef)
@@ -758,12 +758,15 @@ Namespace Sql
             Do
                 Dim t As Token = tokens(p)
 
-                If t.IsKeyword("PRIMARY") OrElse t.IsKeyword("UNIQUE") OrElse t.IsKeyword("KEY") OrElse
-                   t.IsKeyword("INDEX") OrElse t.IsKeyword("CONSTRAINT") OrElse t.IsKeyword("FOREIGN") Then
-                    Throw Err("inline table constraints are not supported yet, declare them on the column instead!")
+                If t.IsKeyword("PRIMARY") OrElse t.IsKeyword("UNIQUE") OrElse
+                   t.IsKeyword("KEY") OrElse t.IsKeyword("INDEX") Then
+                    ' a table level key definition: PRIMARY KEY(cols) / UNIQUE KEY name(cols) / KEY name(cols)
+                    keys.Add(ParseTableKey())
+                ElseIf t.IsKeyword("CONSTRAINT") OrElse t.IsKeyword("FOREIGN") Then
+                    Throw Err("named constraints and foreign keys are not supported yet!")
+                Else
+                    cols.Add(ParseColumnDef())
                 End If
-
-                cols.Add(ParseColumnDef())
 
                 If Not AcceptSymbol(",") Then
                     Exit Do
@@ -777,6 +780,73 @@ Namespace Sql
             End If
 
             Return cols
+        End Function
+
+        ''' <summary>
+        ''' parse PRIMARY KEY (cols) / [UNIQUE] KEY|INDEX [name] (cols) definitions.
+        ''' </summary>
+        Private Function ParseTableKey() As TableKeyInfo
+            Dim key As New TableKeyInfo
+
+            If AcceptKeyword("PRIMARY") Then
+                ExpectKeyword("KEY")
+                key.Primary = True
+                key.Unique = True
+                key.Name = "PRIMARY"
+            Else
+                If AcceptKeyword("UNIQUE") Then
+                    key.Unique = True
+                End If
+
+                If Not (AcceptKeyword("KEY") OrElse AcceptKeyword("INDEX")) Then
+                    Throw Err("expected a KEY or INDEX definition!")
+                End If
+
+                ' the key name is optional
+                If tokens(p).Kind = TokenKind.Identifier OrElse tokens(p).Kind = TokenKind.QuotedIdentifier Then
+                    If Not tokens(p + 1).IsSymbol("(") Then
+                        Throw Err("expected '(' after the key name!")
+                    End If
+
+                    key.Name = ExpectIdentifier()
+                End If
+            End If
+
+            ExpectSymbol("(")
+
+            Do
+                key.Columns.Add(ExpectIdentifier())
+
+                If Not AcceptSymbol(",") Then
+                    Exit Do
+                End If
+            Loop
+
+            ExpectSymbol(")")
+
+            ' optional index options: USING BTREE, COMMENT '...'
+            Do While tokens(p).Kind = TokenKind.Identifier AndAlso Not IsClauseStart(tokens(p))
+                If tokens(p).IsKeyword("COMMENT") Then
+                    key.Name = If(key.Name, "")
+                    p += 1
+
+                    If tokens(p).Kind = TokenKind.String Then
+                        p += 1
+                    End If
+                Else
+                    p += 1
+
+                    If AcceptSymbol("=") Then
+                        p += 1
+                    End If
+                End If
+            Loop
+
+            If key.Name Is Nothing Then
+                key.Name = "key_" & String.Join("_", key.Columns.ToArray())
+            End If
+
+            Return key
         End Function
 
         Private Function ParseColumnDef() As ColumnDef
@@ -805,7 +875,12 @@ Namespace Sql
                 typeText &= ")"
             End If
 
-            AcceptKeyword("UNSIGNED")
+            ' keep the unsigned flag inside the original type text: int unsigned
+            If AcceptKeyword("UNSIGNED") Then
+                typeText &= " unsigned"
+            End If
+
+            AcceptKeyword("ZEROFILL")
 
             col.RawType = typeText
 
@@ -831,6 +906,11 @@ Namespace Sql
                     ' ignored: no auto value generator yet
                 ElseIf AcceptKeyword("DEFAULT") Then
                     col.DefaultValue = ParseDefaultLiteral()
+                ElseIf AcceptKeyword("COMMENT") Then
+                    col.Comment = ExpectStringLiteral("column comment")
+                ElseIf AcceptKeyword("ON") Then
+                    ' ON UPDATE CURRENT_TIMESTAMP and friends are ignored
+                    SkipUntilCommaOrEnd()
                 Else
                     Exit Do
                 End If
@@ -865,10 +945,77 @@ Namespace Sql
             ElseIf t.IsKeyword("FALSE") Then
                 p += 1
                 Return False
+            ElseIf t.IsKeyword("CURRENT_TIMESTAMP") Then
+                ' resolved to the current time when a row is inserted
+                p += 1
+
+                If AcceptSymbol("(") Then
+                    ExpectSymbol(")")
+                End If
+
+                Return "CURRENT_TIMESTAMP"
+            ElseIf t.IsKeyword("NOW") Then
+                p += 1
+                ExpectSymbol("(")
+                ExpectSymbol(")")
+                Return "CURRENT_TIMESTAMP"
             End If
 
             Throw New SqlError("unsupported DEFAULT value: " & t.Text, t.Position)
         End Function
+
+        Private Function ExpectStringLiteral(what As String) As String
+            Dim t As Token = tokens(p)
+
+            If t.Kind <> TokenKind.String Then
+                Throw New SqlError("expected a string literal for " & what & "!", t.Position)
+            End If
+
+            p += 1
+            Return t.Text
+        End Function
+
+        ''' <summary>skip the remaining tokens of one column attribute</summary>
+        Private Sub SkipUntilCommaOrEnd()
+            Do
+                Dim t As Token = tokens(p)
+
+                If t.Kind = TokenKind.EndOfFile OrElse t.IsSymbol(",") OrElse t.IsSymbol(")") Then
+                    Exit Do
+                End If
+
+                p += 1
+            Loop
+        End Sub
+
+        ''' <summary>
+        ''' parse the trailing table options: COMMENT='text' is kept as the table
+        ''' comment, everything else (ENGINE=..., CHARSET=..., AUTO_INCREMENT=...)
+        ''' is parsed away.
+        ''' </summary>
+        Private Sub ParseTableOptions(stmt As CreateStatement)
+            Do While tokens(p).Kind = TokenKind.Identifier
+                If IsClauseStart(tokens(p)) Then
+                    Exit Do
+                End If
+
+                If tokens(p).IsKeyword("COMMENT") Then
+                    p += 1
+                    AcceptSymbol("=")
+                    stmt.TableComment = ExpectStringLiteral("the table comment")
+                Else
+                    p += 1
+
+                    If AcceptSymbol("=") Then
+                        If tokens(p).Kind = TokenKind.Identifier OrElse
+                           tokens(p).Kind = TokenKind.Number OrElse
+                           tokens(p).Kind = TokenKind.String Then
+                            p += 1
+                        End If
+                    End If
+                End If
+            Loop
+        End Sub
 
         Private Sub SkipTrailingOptions()
             ' ENGINE=..., CHARSET=..., COMMENT=... are parsed away

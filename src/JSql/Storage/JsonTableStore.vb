@@ -37,8 +37,22 @@ Namespace Storage
             End If
 
             Dim table As New StoredTable With {
-                .Schema = New TableSchema With {.TableName = tableFile.table}
+                .Schema = New TableSchema With {
+                    .TableName = tableFile.table,
+                    .Comment = tableFile.comment
+                }
             }
+
+            If tableFile.keys IsNot Nothing Then
+                For Each key In tableFile.keys
+                    table.Schema.Keys.Add(New TableKeyInfo With {
+                        .Name = key.name,
+                        .Unique = key.unique,
+                        .Primary = key.primary,
+                        .Columns = If(key.columns, New List(Of String)())
+                    })
+                Next
+            End If
 
             For Each col In tableFile.columns
                 table.Schema.Columns.Add(New ColumnDef With {
@@ -47,7 +61,8 @@ Namespace Storage
                     .RawType = col.type,
                     .NotNull = col.NotNull,
                     .PrimaryKey = col.PrimaryKey,
-                    .DefaultValue = JsonTableStore.ConvertJsonElement(col.defaultValue)
+                    .DefaultValue = JsonTableStore.ConvertJsonElement(col.defaultValue),
+                    .Comment = col.comment
                 })
             Next
 
@@ -70,8 +85,18 @@ Namespace Storage
 
         Public Sub Write(filePath As String, table As StoredTable) Implements ITableStore.Write
             Dim tableFile As New JsonTableFile With {
-                .table = table.Schema.TableName
+                .table = table.Schema.TableName,
+                .comment = table.Schema.Comment
             }
+
+            For Each key In table.Schema.Keys
+                tableFile.keys.Add(New JsonKey With {
+                    .name = key.Name,
+                    .columns = key.Columns,
+                    .unique = key.Unique,
+                    .primary = key.Primary
+                })
+            Next
 
             For Each col In table.Schema.Columns
                 tableFile.columns.Add(New JsonColumn With {
@@ -79,7 +104,8 @@ Namespace Storage
                     .type = col.RawType,
                     .notNull = col.NotNull,
                     .primaryKey = col.PrimaryKey,
-                    .defaultValue = col.DefaultValue
+                    .defaultValue = col.DefaultValue,
+                    .comment = col.Comment
                 })
             Next
 
@@ -132,6 +158,10 @@ Namespace Storage
 
     Public Class JsonTableFile
         Public Property table As String
+        ''' <summary>the mysql table comment: COMMENT='text'</summary>
+        Public Property comment As String
+        ''' <summary>table level key definitions declared inside CREATE TABLE</summary>
+        Public Property keys As New List(Of JsonKey)
         Public Property columns As New List(Of JsonColumn)
         Public Property rows As List(Of Dictionary(Of String, Object))
     End Class
@@ -142,5 +172,14 @@ Namespace Storage
         Public Property notNull As Boolean
         Public Property primaryKey As Boolean
         Public Property defaultValue As Object
+        ''' <summary>the mysql column comment: COMMENT 'text'</summary>
+        Public Property comment As String
+    End Class
+
+    Public Class JsonKey
+        Public Property name As String
+        Public Property columns As New List(Of String)
+        Public Property unique As Boolean
+        Public Property primary As Boolean
     End Class
 End Namespace

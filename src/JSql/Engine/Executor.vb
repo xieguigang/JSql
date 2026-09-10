@@ -707,7 +707,10 @@ Namespace Engine
                 End If
 
                 Dim table As New StoredTable With {
-                    .Schema = New TableSchema With {.TableName = stmt.Name}
+                    .Schema = New TableSchema With {
+                        .TableName = stmt.Name,
+                        .Comment = stmt.TableComment
+                    }
                 }
 
                 Dim primary As Boolean = False
@@ -726,6 +729,29 @@ Namespace Engine
                     End If
 
                     table.Schema.Columns.Add(col)
+                Next
+
+                ' a table level PRIMARY KEY(col) also marks the column itself
+                For Each key In stmt.Keys
+                    table.Schema.Keys.Add(key)
+
+                    If key.Primary Then
+                        For Each keyColumn In key.Columns
+                            Dim target As ColumnDef = table.Schema.FindColumn(keyColumn)
+
+                            If target Is Nothing Then
+                                Throw New SqlError("primary key references an unknown column: " & keyColumn)
+                            End If
+
+                            If primary AndAlso Not target.PrimaryKey Then
+                                Throw New SqlError("only one primary key column is supported")
+                            End If
+
+                            target.PrimaryKey = True
+                            target.NotNull = True
+                            primary = True
+                        Next
+                    End If
                 Next
 
                 engine.Catalog.SaveTable(db, table)
@@ -846,10 +872,11 @@ Namespace Engine
 
                     For Each col In stored.Schema.Columns
                         rowsx.Add(New Object() {col.Name, col.TypeName, If(col.NotNull, "NO", "YES"),
-                                                If(col.PrimaryKey, "PRI", ""), If(col.DefaultValue, Nothing)})
+                                                If(col.PrimaryKey, "PRI", ""), If(col.DefaultValue, Nothing),
+                                                If(col.Comment, Nothing)})
                     Next
 
-                    Return ResultSet.FromQuery(New String() {"Field", "Type", "Null", "Key", "Default"}, rowsx)
+                    Return ResultSet.FromQuery(New String() {"Field", "Type", "Null", "Key", "Default", "Comment"}, rowsx)
             End Select
         End Function
     End Class
