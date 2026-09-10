@@ -1,7 +1,0 @@
-USE edge;
-SELECT id FROM t WHERE id >= 2;
-SELECT id FROM t WHERE id <= 4;
-SELECT id FROM t WHERE id > 1;
-SELECT id FROM t WHERE id >= 2 AND id <= 4;
-SELECT id FROM t WHERE id BETWEEN 2 AND 4;
-SELECT id FROM t WHERE id > 1 AND id < 4;
