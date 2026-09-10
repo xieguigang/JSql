@@ -79,8 +79,16 @@ Namespace Engine
                 End If
             Next
 
+            Dim allColumns As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+
+            For Each ref In refs
+                For Each col In ref.Schema.Columns
+                    allColumns.Add(col.Name)
+                Next
+            Next
+
             If stmt.GroupBy.Count > 0 OrElse (hasAggregate AndAlso stmt.FromTable IsNot Nothing) Then
-                Return ExecuteGrouped(stmt, scopes, projections)
+                Return ExecuteGrouped(stmt, scopes, projections, allColumns)
             End If
 
             Return ExecutePlain(stmt, scopes, projections)
@@ -372,8 +380,60 @@ Namespace Engine
             Return rows
         End Function
 
+        ''' <summary>
+        ''' mysql resolves a bare identifier in HAVING against the output column aliases
+        ''' first, so the alias is rewritten into its projection expression here.
+        ''' </summary>
+        Private Shared Function RewriteAliases(expr As Expression, projections As List(Of SelectItem),
+                                               allColumns As HashSet(Of String)) As Expression
+            If expr Is Nothing Then
+                Return Nothing
+            End If
+
+            If TypeOf expr Is IdentifierExpression Then
+                Dim id = DirectCast(expr, IdentifierExpression)
+
+                If id.Qualifier IsNot Nothing OrElse allColumns.Contains(id.Name) Then
+                    Return expr
+                End If
+
+                For Each item In projections
+                    If String.Equals(item.Alias, id.Name, StringComparison.OrdinalIgnoreCase) Then
+                        Return item.Expression
+                    End If
+                Next
+
+                Return expr
+            End If
+
+            If TypeOf expr Is BinaryExpression Then
+                Dim b = DirectCast(expr, BinaryExpression)
+
+                Return New BinaryExpression With {
+                    .Op = b.Op,
+                    .Left = RewriteAliases(b.Left, projections, allColumns),
+                    .Right = RewriteAliases(b.Right, projections, allColumns)
+                }
+            End If
+
+            If TypeOf expr Is UnaryExpression Then
+                Dim u = DirectCast(expr, UnaryExpression)
+
+                Return New UnaryExpression With {.Op = u.Op, .Operand = RewriteAliases(u.Operand, projections, allColumns)}
+            End If
+
+            If TypeOf expr Is IsNullExpression Then
+                Dim n = DirectCast(expr, IsNullExpression)
+
+                Return New IsNullExpression With {.Negated = n.Negated, .Operand = RewriteAliases(n.Operand, projections, allColumns)}
+            End If
+
+            Return expr
+        End Function
+
         Private Function ExecuteGrouped(stmt As SelectStatement, scopes As List(Of RowScope),
-                                        projections As List(Of SelectItem)) As ResultSet
+                                        projections As List(Of SelectItem), allColumns As HashSet(Of String)) As ResultSet
+        Dim having As Expression = RewriteAliases(stmt.Having, projections, allColumns)
             Dim groups As New List(Of List(Of RowScope))
             Dim groupKeys As New List(Of Object())
 
@@ -413,8 +473,8 @@ Namespace Engine
                 Dim representative As RowScope = If(rows.Count > 0, rows(0), New RowScope())
                 Dim ev As New ExpressionEvaluator(representative, rows)
 
-                If stmt.Having IsNot Nothing Then
-                    If Not ExpressionEvaluator.IsTrue(ev.Eval(stmt.Having)) Then
+                If having IsNot Nothing Then
+                    If Not ExpressionEvaluator.IsTrue(ev.Eval(having)) Then
                         Continue For
                     End If
                 End If

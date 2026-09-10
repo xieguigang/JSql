@@ -155,11 +155,22 @@ Namespace Indexing
 
         Private Shared Function RangeType(valueType As String) As Type
             Select Case valueType
-                Case "Integer" : Return GetType(Integer)
+                Case "Integer", "Int32" : Return GetType(Integer)
                 Case "Double" : Return GetType(Double)
-                Case "Date" : Return GetType(Date)
+                Case "Date", "DateTime" : Return GetType(Date)
                 Case Else : Throw New SqlError("unknown range index value type: " & valueType)
             End Select
+        End Function
+
+        ''' <summary>the persisted name of the clr type of a range index</summary>
+        Private Shared Function RangeValueTypeName(valueType As Type) As String
+            If valueType Is GetType(Integer) Then
+                Return "Integer"
+            ElseIf valueType Is GetType(Date) Then
+                Return "Date"
+            Else
+                Return "Double"
+            End If
         End Function
 
         Private Shared Function RangeTypeOf(schema As TableSchema, column As String) As Type
@@ -197,12 +208,22 @@ Namespace Indexing
                 .Name = name,
                 .Column = column,
                 .Kind = kind,
-                .ValueType = If(kind = IndexKind.Range, RangeTypeOf(stored.Schema, column).Name, "String")
+                .ValueType = If(kind = IndexKind.Range, RangeValueTypeName(RangeTypeOf(stored.Schema, column)), "String")
             }
 
             sets.Indexes.Add(columnIndex)
             Invalidate(db, table)
-            Persist(db, table, columnIndex, EnsureBuilt(db, table, stored), stored.Rows.Count, catalog.DatabaseDir(db))
+
+            ' build and persist the index right away, roll the catalog entry back
+            ' when anything goes wrong so that no broken index is left behind
+            Try
+                Persist(db, table, columnIndex, EnsureBuilt(db, table, stored), stored.Rows.Count, catalog.DatabaseDir(db))
+            Catch ex As Exception
+                sets.Indexes.Remove(columnIndex)
+                Invalidate(db, table)
+                Throw
+            End Try
+
             Return columnIndex
         End Function
 
