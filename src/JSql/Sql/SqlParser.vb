@@ -63,7 +63,52 @@
             Return New SqlError(message, tokens(p).Position)
         End Function
 
-        ' STATEMENT DISPATCH
+        ''' <summary>parses one statement; a trailing ';' is accepted and extra tokens rejected</summary>
+        Public Function ParseStatement() As SqlStatement
+            If AtEof() Then
+                Throw Err("empty sql statement!")
+            End If
+
+            Dim stmt As SqlStatement = ParseStatementCore()
+
+            AcceptSymbol(";")
+
+            If Not AtEof() Then
+                Throw Err("unexpected token '" & tokens(p).Text & "' after the end of statement!")
+            End If
+
+            Return stmt
+        End Function
+
+        Private Function ParseStatementCore() As SqlStatement
+            Dim t As Token = tokens(p)
+
+            If t.IsKeyword("SELECT") Then
+                Return ParseSelect()
+            ElseIf t.IsKeyword("INSERT") Then
+                Return ParseInsert()
+            ElseIf t.IsKeyword("UPDATE") Then
+                Return ParseUpdate()
+            ElseIf t.IsKeyword("DELETE") Then
+                Return ParseDelete()
+            ElseIf t.IsKeyword("CREATE") Then
+                Return ParseCreate()
+            ElseIf t.IsKeyword("DROP") Then
+                Return ParseDrop()
+            ElseIf t.IsKeyword("USE") Then
+                p += 1
+                Return New UseStatement With {.Database = ExpectIdentifier()}
+            ElseIf t.IsKeyword("SHOW") Then
+                Return ParseShow()
+            ElseIf t.IsKeyword("DESCRIBE") OrElse t.IsKeyword("DESC") OrElse t.IsKeyword("EXPLAIN") Then
+                p += 1
+                Return New ShowStatement With {.Kind = ShowKind.Columns, .Target = ExpectIdentifier()}
+            End If
+
+            Throw Err("unsupported sql statement starts with '" & t.Text & "'!")
+        End Function
+
+        ' SELECT PARSING
 
     End Class
 End Namespace
