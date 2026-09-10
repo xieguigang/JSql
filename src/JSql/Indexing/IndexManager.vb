@@ -360,6 +360,23 @@ Namespace Indexing
         ''' or nothing when no usable index exists(first calldb the caller falls back to
         ''' a full table scan).
         ''' </summary>
+        ' ==================== index probing ====================
+
+        Private Class IndexProbe
+
+            ''' <summary>a term hash query, nothing when this probe is a range probe</summary>
+            Public Property HashQuery As Query
+            Public Property RangeColumn As ColumnIndexInfo
+            ''' <summary>Gt/Ge -> SearchGreaterThan, Lt/Le -> SearchLessThan</summary>
+            Public Property RangeOp As BinaryOp
+            Public Property RangeValue As Object
+        End Class
+
+        ''' <summary>
+        ''' translate the top level AND conditions of a WHERE clause into search index
+        ''' probes. returns the candidate row offsets of the given table, or nothing when
+        ''' no usable index exists so that the caller falls back to a full table scan.
+        ''' </summary>
         Public Function Probe(db As String, table As String, stored As StoredTable, where As Expression) As Integer()
             If where Is Nothing Then
                 Return Nothing
@@ -371,46 +388,99 @@ Namespace Indexing
                 Return Nothing
             End If
 
-            Dim queries As New List(Of Query)
+            Dim probes As New List(Of IndexProbe)
 
             For Each conjunct In SplitAnd(where)
-                Dim q As Query = Nothing
-
                 Try
-                    q = TryMapQuery(conjunct, sets, stored.Schema)
+                    CollectProbe(conjunct, sets, stored.Schema, probes)
                 Catch ex As Exception
-                    q = Nothing
+                    ' an unmappable condition simply means: no index for it
                 End Try
-
-                If q IsNot Nothing Then
-                    queries.Add(q)
-                End If
             Next
 
-            If queries.Count = 0 Then
+            If probes.Count = 0 Then
                 Return Nothing
             End If
 
             Try
-                Dim hits As Integer() = EnsureBuilt(db, table, stored).SelectRowOffsets(queries)
+                Dim memory As JsonMemoryIndex = EnsureBuilt(db, table, stored)
+                Dim result As Integer() = Nothing
+
+                ' every probe is evaluated on its own and intersected here: the candidate
+                ' set must stay a superset of the matching rows, the exact condition is
+                ' checked again by the sql executor.
+                For Each item As IndexProbe In probes
+                    Dim hits As Integer()
+
+                    If item.HashQuery IsNot Nothing Then
+                        hits = memory.SelectRowOffsets(New Query() {item.HashQuery})
+                    Else
+                        hits = ProbeRange(memory, item.RangeColumn, item.RangeOp, item.RangeValue)
+                    End If
+
+                    If hits Is Nothing OrElse hits.Length = 0 Then
+                        Return New Integer() {}
+                    End If
+
+                    result = If(result Is Nothing, hits, result.Intersect(hits).ToArray())
+
+                    If result.Length = 0 Then
+                        Return New Integer() {}
+                    End If
+                Next
 
                 If Environment.GetEnvironmentVariable("JSQL_DEBUG_INDEX") = "1" Then
-                    Console.Error.WriteLine("[index] queries=" & queries.Count & " rows=" & stored.Rows.Count &
-                                            " hits=" & If(hits Is Nothing, "nothing", hits.Length.ToString()) &
-                                            " -> " & String.Join(",", hits.Select(Function(i) i.ToString()).ToArray()))
+                    Console.Error.WriteLine("[index] probes=" & probes.Count & " rows=" & stored.Rows.Count &
+                                            " hits=" & If(result Is Nothing, "nothing", result.Length.ToString()) &
+                                            " -> " & String.Join(",", result.Select(Function(i) i.ToString()).ToArray()))
                 End If
 
-                If hits Is Nothing Then
-                    Return New Integer() {}
-                End If
-
-                Return hits
+                Return result
             Catch ex As Exception
                 ' never let a broken index break the whole query: fall back to a full scan
                 Console.Error.WriteLine("[index] index probe failed: " & ex.Message)
                 Invalidate(db, table)
                 Return Nothing
             End Try
+        End Function
+
+        ''' <summary>
+        ''' run one range condition against the LINQ range index of a column. the boundary
+        ''' is always kept inclusive here: an over sized candidate set gets filtered by the
+        ''' executor, a missing row would produce a wrong result instead.
+        ''' </summary>
+        Private Shared Function ProbeRange(memory As JsonMemoryIndex, columnIndex As ColumnIndexInfo,
+                                           op As BinaryOp, value As Object) As Integer()
+            Dim search As ValueIndex = memory.RangeValueIndex(columnIndex.Column)
+            Dim addresses As IEnumerable
+            Dim greater As Boolean = (op = BinaryOp.Gt OrElse op = BinaryOp.Ge)
+
+            If RangeTypeOf(columnIndex) Is GetType(Integer) Then
+                Dim index = DirectCast(search, RangeIndex(Of Integer))
+                Dim v As Integer = CInt(value)
+
+                addresses = If(greater, index.SearchGreaterThan(v, strict:=False), index.SearchLessThan(v, strict:=False))
+            ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
+                Dim index = DirectCast(search, RangeIndex(Of Date))
+                Dim v As Date = CDate(value)
+
+                addresses = If(greater, index.SearchGreaterThan(v, strict:=False), index.SearchLessThan(v, strict:=False))
+            Else
+                Dim index = DirectCast(search, RangeIndex(Of Double))
+                Dim v As Double = CDbl(value)
+
+                addresses = If(greater, index.SearchGreaterThan(v, strict:=False), index.SearchLessThan(v, strict:=False))
+            End If
+
+            Dim offsets As New List(Of Integer)
+
+            ' the range index yields SeqValue(Of T) items, the i slot keeps the
+            ' original row offset of the indexed value
+            For Each hit As Object In addresses
+                offsets.Add(CInt(hit.i))
+            Next
+
+            Return offsets.ToArray()
         End Function
 
         Private Shared Function SplitAnd(expr As Expression) As List(Of Expression)
@@ -431,118 +501,110 @@ Namespace Indexing
         End Sub
 
         ''' <summary>
-        ''' map one sql comparison onto the search index query, nothing when the condition
-        ''' can not be served by any available column index.
+        ''' map one sql condition onto the available column indexes; a single condition may
+        ''' produce two probes, for example BETWEEN becomes greater-than plus less-than.
         ''' </summary>
-        Private Function TryMapQuery(expr As Expression, sets As TableIndexSet, schema As TableSchema) As Query
+        Private Shared Sub CollectProbe(expr As Expression, sets As TableIndexSet,
+                                        schema As TableSchema, probes As List(Of IndexProbe))
             If TypeOf expr Is BetweenExpression Then
                 Dim bt = DirectCast(expr, BetweenExpression)
                 Dim column As String = ColumnOf(bt.Operand)
 
                 If column Is Nothing OrElse Not IsConst(bt.Low) OrElse Not IsConst(bt.High) Then
-                    Return Nothing
+                    Return
                 End If
 
                 Dim columnIndex As ColumnIndexInfo = sets.FindByColumn(column, IndexKind.Range)
 
                 If columnIndex Is Nothing Then
-                    Return Nothing
+                    Return
                 End If
 
-                Return New Query With {
-                    .search = Query.Type.ValueRange,
-                    .field = column,
-                    .value = RangePair(columnIndex, ConstValue(bt.Low), ConstValue(bt.High))
-                }
+                Dim low As Object = RangeScalar(columnIndex, ConstValue(bt.Low))
+                Dim high As Object = RangeScalar(columnIndex, ConstValue(bt.High))
+
+                If low Is Nothing OrElse high Is Nothing Then
+                    Return
+                End If
+
+                probes.Add(New IndexProbe With {.RangeColumn = columnIndex, .RangeOp = BinaryOp.Ge, .RangeValue = low})
+                probes.Add(New IndexProbe With {.RangeColumn = columnIndex, .RangeOp = BinaryOp.Le, .RangeValue = high})
+                Return
             End If
 
             Dim b As BinaryExpression = TryCast(expr, BinaryExpression)
 
             If b Is Nothing Then
-                Return Nothing
+                Return
             End If
 
             Dim op As BinaryOp = b.Op
-            Dim left As Expression = b.Left
-            Dim right As Expression = b.Right
+            Dim lhs As Expression = b.Left
+            Dim rhs As Expression = b.Right
 
             If op <> BinaryOp.Eq AndAlso op <> BinaryOp.Gt AndAlso op <> BinaryOp.Ge AndAlso
                op <> BinaryOp.Lt AndAlso op <> BinaryOp.Le Then
-                Return Nothing
+                Return
             End If
 
             ' normalize literal = column into column = literal
-            If IsConst(left) AndAlso Not IsConst(right) Then
-                Dim swap As Expression = left
-                left = right
-                right = swap
+            If IsConst(lhs) AndAlso Not IsConst(rhs) Then
+                Dim swap As Expression = lhs
+                lhs = rhs
+                rhs = swap
                 op = Flip(op)
             End If
 
-            Dim field As String = ColumnOf(left)
+            Dim field As String = ColumnOf(lhs)
 
-            If field Is Nothing OrElse Not IsConst(right) Then
-                Return Nothing
+            If field Is Nothing OrElse Not IsConst(rhs) Then
+                Return
             End If
 
-            Dim value As Object = ConstValue(right)
+            Dim value As Object = ConstValue(rhs)
 
             If op = BinaryOp.Eq Then
-                Dim hashInfo As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Hash)
+                Dim hashIndex As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Hash)
 
-                If hashInfo IsNot Nothing Then
-                    Return New Query With {
-                        .search = Query.Type.HashTerm,
-                        .field = field,
-                        .value = Convert.ToString(value)
-                    }
+                If hashIndex IsNot Nothing Then
+                    probes.Add(New IndexProbe With {
+                        .HashQuery = New Query With {
+                            .search = Query.Type.HashTerm,
+                            .field = field,
+                            .value = Convert.ToString(value)
+                        }
+                    })
+                    Return
                 End If
 
-                Dim rangeInfo As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Range)
+                Dim rangeIndex As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Range)
 
-                If rangeInfo IsNot Nothing Then
-                    Dim scalar As Object = RangeScalar(rangeInfo, value)
+                If rangeIndex IsNot Nothing Then
+                    Dim scalar As Object = RangeScalar(rangeIndex, value)
 
                     If scalar IsNot Nothing Then
-                        Return New Query With {
-                            .search = Query.Type.ValueMatch,
-                            .field = field,
-                            .value = scalar
-                        }
+                        probes.Add(New IndexProbe With {.RangeColumn = rangeIndex, .RangeOp = BinaryOp.Ge, .RangeValue = scalar})
+                        probes.Add(New IndexProbe With {.RangeColumn = rangeIndex, .RangeOp = BinaryOp.Le, .RangeValue = scalar})
                     End If
                 End If
 
-                Return Nothing
+                Return
             End If
 
-            Dim info2 As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Range)
+            Dim boundIndex As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Range)
 
-            If info2 Is Nothing Then
-                Return Nothing
+            If boundIndex Is Nothing Then
+                Return
             End If
 
-            Dim lower As Object = RangeScalar(info2, value)
+            Dim bound As Object = RangeScalar(boundIndex, value)
 
-            If lower Is Nothing Then
-                Return Nothing
+            If bound Is Nothing Then
+                Return
             End If
 
-            ' keep a superset here: the range borders are inclusive so that no matching
-            ' row can be missed, the exact condition is checked again by the executor.
-            If op = BinaryOp.Gt OrElse op = BinaryOp.Ge Then
-                Return New Query With {
-                    .search = Query.Type.ValueRange,
-                    .field = field,
-                    .value = RangePair(info2, lower, MaxValue(info2))
-                }
-            End If
-
-            Return New Query With {
-                .search = Query.Type.ValueRange,
-                .field = field,
-                .value = RangePair(info2, MinValue(info2), lower)
-            }
-        End Function
+            probes.Add(New IndexProbe With {.RangeColumn = boundIndex, .RangeOp = op, .RangeValue = bound})
+        End Sub
 
         Private Shared Function Flip(op As BinaryOp) As BinaryOp
             Select Case op
@@ -554,7 +616,7 @@ Namespace Indexing
             End Select
         End Function
 
-        ''' <summary>a bare, unqualified column reference usable for the search index</summary>
+        ''' <summary>a bare, unqualified column reference that the search index can serve</summary>
         Private Shared Function ColumnOf(expr As Expression) As String
             Dim col As IdentifierExpression = TryCast(expr, IdentifierExpression)
 
@@ -579,8 +641,8 @@ Namespace Indexing
 
         Private Shared Function RangeTypeOf(columnIndex As ColumnIndexInfo) As Type
             Select Case columnIndex.ValueType
-                Case "Integer" : Return GetType(Integer)
-                Case "Date" : Return GetType(Date)
+                Case "Integer", "Int32" : Return GetType(Integer)
+                Case "Date", "DateTime" : Return GetType(Date)
                 Case Else : Return GetType(Double)
             End Select
         End Function
@@ -588,19 +650,19 @@ Namespace Indexing
         Private Shared Function RangeScalar(columnIndex As ColumnIndexInfo, value As Object) As Object
             Try
                 If TypeOf value Is Date Then
-                    Return If(columnIndex.ValueType = "Date", CObj(CDate(value)), Nothing)
+                    Return If(RangeTypeOf(columnIndex) Is GetType(Date), CObj(CDate(value)), Nothing)
                 End If
 
                 Dim n As Double = Convert.ToDouble(value)
 
-                If columnIndex.ValueType = "Integer" Then
+                If RangeTypeOf(columnIndex) Is GetType(Integer) Then
                     ' only whole numbers can be mapped onto an integer index
                     If Math.Round(n) <> n OrElse n < Integer.MinValue OrElse n > Integer.MaxValue Then
                         Return Nothing
                     End If
 
                     Return CInt(n)
-                ElseIf columnIndex.ValueType = "Date" Then
+                ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
                     If TypeOf value Is String Then
                         Dim d As Date
 
@@ -616,37 +678,6 @@ Namespace Indexing
             Catch ex As Exception
                 Return Nothing
             End Try
-        End Function
-
-        ''' <summary>build the typed [min,max] array that the LINQ range index expects</summary>
-        Private Shared Function RangePair(columnIndex As ColumnIndexInfo, min As Object, max As Object) As Object
-            If RangeTypeOf(columnIndex) Is GetType(Integer) Then
-                Return New Integer() {CInt(min), CInt(max)}
-            ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
-                Return New Date() {CDate(min), CDate(max)}
-            Else
-                Return New Double() {CDbl(min), CDbl(max)}
-            End If
-        End Function
-
-        Private Shared Function MinValue(columnIndex As ColumnIndexInfo) As Object
-            If RangeTypeOf(columnIndex) Is GetType(Integer) Then
-                Return Integer.MinValue
-            ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
-                Return New Date(1900, 1, 1)
-            Else
-                Return -1.7E+308
-            End If
-        End Function
-
-        Private Shared Function MaxValue(columnIndex As ColumnIndexInfo) As Object
-            If RangeTypeOf(columnIndex) Is GetType(Integer) Then
-                Return Integer.MaxValue
-            ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
-                Return New Date(9999, 12, 31)
-            Else
-                Return 1.7E+308
-            End If
         End Function
     End Class
 End Namespace

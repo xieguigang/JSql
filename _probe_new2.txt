@@ -1,0 +1,199 @@
+
+        Private Shared Function SplitAnd(expr As Expression) As List(Of Expression)
+            Dim parts As New List(Of Expression)
+            CollectAnd(expr, parts)
+            Return parts
+        End Function
+
+        Private Shared Sub CollectAnd(expr As Expression, parts As List(Of Expression))
+            Dim b As BinaryExpression = TryCast(expr, BinaryExpression)
+
+            If b IsNot Nothing AndAlso b.Op = BinaryOp.And Then
+                CollectAnd(b.Left, parts)
+                CollectAnd(b.Right, parts)
+            Else
+                parts.Add(expr)
+            End If
+        End Sub
+
+        ''' <summary>
+        ''' map one sql condition onto the available column indexes; a single condition may
+        ''' produce two probes, for example BETWEEN becomes greater-than plus less-than.
+        ''' </summary>
+        Private Shared Sub CollectProbe(expr As Expression, sets As TableIndexSet,
+                                        schema As TableSchema, probes As List(Of IndexProbe))
+            If TypeOf expr Is BetweenExpression Then
+                Dim bt = DirectCast(expr, BetweenExpression)
+                Dim column As String = ColumnOf(bt.Operand)
+
+                If column Is Nothing OrElse Not IsConst(bt.Low) OrElse Not IsConst(bt.High) Then
+                    Return
+                End If
+
+                Dim columnIndex As ColumnIndexInfo = sets.FindByColumn(column, IndexKind.Range)
+
+                If columnIndex Is Nothing Then
+                    Return
+                End If
+
+                Dim low As Object = RangeScalar(columnIndex, ConstValue(bt.Low))
+                Dim high As Object = RangeScalar(columnIndex, ConstValue(bt.High))
+
+                If low Is Nothing OrElse high Is Nothing Then
+                    Return
+                End If
+
+                probes.Add(New IndexProbe With {.RangeColumn = columnIndex, .RangeOp = BinaryOp.Ge, .RangeValue = low})
+                probes.Add(New IndexProbe With {.RangeColumn = columnIndex, .RangeOp = BinaryOp.Le, .RangeValue = high})
+                Return
+            End If
+
+            Dim b As BinaryExpression = TryCast(expr, BinaryExpression)
+
+            If b Is Nothing Then
+                Return
+            End If
+
+            Dim op As BinaryOp = b.Op
+            Dim lhs As Expression = b.Left
+            Dim rhs As Expression = b.Right
+
+            If op <> BinaryOp.Eq AndAlso op <> BinaryOp.Gt AndAlso op <> BinaryOp.Ge AndAlso
+               op <> BinaryOp.Lt AndAlso op <> BinaryOp.Le Then
+                Return
+            End If
+
+            ' normalize literal = column into column = literal
+            If IsConst(lhs) AndAlso Not IsConst(rhs) Then
+                Dim swap As Expression = lhs
+                lhs = rhs
+                rhs = swap
+                op = Flip(op)
+            End If
+
+            Dim field As String = ColumnOf(lhs)
+
+            If field Is Nothing OrElse Not IsConst(rhs) Then
+                Return
+            End If
+
+            Dim value As Object = ConstValue(rhs)
+
+            If op = BinaryOp.Eq Then
+                Dim hashIndex As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Hash)
+
+                If hashIndex IsNot Nothing Then
+                    probes.Add(New IndexProbe With {
+                        .HashQuery = New Query With {
+                            .search = Query.Type.HashTerm,
+                            .field = field,
+                            .value = Convert.ToString(value)
+                        }
+                    })
+                    Return
+                End If
+
+                Dim rangeIndex As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Range)
+
+                If rangeIndex IsNot Nothing Then
+                    Dim scalar As Object = RangeScalar(rangeIndex, value)
+
+                    If scalar IsNot Nothing Then
+                        probes.Add(New IndexProbe With {.RangeColumn = rangeIndex, .RangeOp = BinaryOp.Ge, .RangeValue = scalar})
+                        probes.Add(New IndexProbe With {.RangeColumn = rangeIndex, .RangeOp = BinaryOp.Le, .RangeValue = scalar})
+                    End If
+                End If
+
+                Return
+            End If
+
+            Dim boundIndex As ColumnIndexInfo = sets.FindByColumn(field, IndexKind.Range)
+
+            If boundIndex Is Nothing Then
+                Return
+            End If
+
+            Dim bound As Object = RangeScalar(boundIndex, value)
+
+            If bound Is Nothing Then
+                Return
+            End If
+
+            probes.Add(New IndexProbe With {.RangeColumn = boundIndex, .RangeOp = op, .RangeValue = bound})
+        End Sub
+
+        Private Shared Function Flip(op As BinaryOp) As BinaryOp
+            Select Case op
+                Case BinaryOp.Lt : Return BinaryOp.Gt
+                Case BinaryOp.Le : Return BinaryOp.Ge
+                Case BinaryOp.Gt : Return BinaryOp.Lt
+                Case BinaryOp.Ge : Return BinaryOp.Le
+                Case Else : Return op
+            End Select
+        End Function
+
+        ''' <summary>a bare, unqualified column reference that the search index can serve</summary>
+        Private Shared Function ColumnOf(expr As Expression) As String
+            Dim col As IdentifierExpression = TryCast(expr, IdentifierExpression)
+
+            If col Is Nothing OrElse col.Qualifier IsNot Nothing Then
+                Return Nothing
+            End If
+
+            Return col.Name
+        End Function
+
+        Private Shared Function IsConst(expr As Expression) As Boolean
+            If TypeOf expr Is LiteralExpression Then
+                Return Not DirectCast(expr, LiteralExpression).IsNull
+            End If
+
+            Return False
+        End Function
+
+        Private Shared Function ConstValue(expr As Expression) As Object
+            Return DirectCast(expr, LiteralExpression).Value
+        End Function
+
+        Private Shared Function RangeTypeOf(columnIndex As ColumnIndexInfo) As Type
+            Select Case columnIndex.ValueType
+                Case "Integer", "Int32" : Return GetType(Integer)
+                Case "Date", "DateTime" : Return GetType(Date)
+                Case Else : Return GetType(Double)
+            End Select
+        End Function
+
+        Private Shared Function RangeScalar(columnIndex As ColumnIndexInfo, value As Object) As Object
+            Try
+                If TypeOf value Is Date Then
+                    Return If(RangeTypeOf(columnIndex) Is GetType(Date), CObj(CDate(value)), Nothing)
+                End If
+
+                Dim n As Double = Convert.ToDouble(value)
+
+                If RangeTypeOf(columnIndex) Is GetType(Integer) Then
+                    ' only whole numbers can be mapped onto an integer index
+                    If Math.Round(n) <> n OrElse n < Integer.MinValue OrElse n > Integer.MaxValue Then
+                        Return Nothing
+                    End If
+
+                    Return CInt(n)
+                ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
+                    If TypeOf value Is String Then
+                        Dim d As Date
+
+                        If Date.TryParse(CStr(value), d) Then
+                            Return d
+                        End If
+                    End If
+
+                    Return Nothing
+                Else
+                    Return n
+                End If
+            Catch ex As Exception
+                Return Nothing
+            End Try
+        End Function
+    End Class
+End Namespace
