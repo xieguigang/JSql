@@ -1,5 +1,3 @@
-Imports System.Collections.Generic
-
 Namespace Sql
 
     ''' <summary>sql syntax error with character position info</summary>

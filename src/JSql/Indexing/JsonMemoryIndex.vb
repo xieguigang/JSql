@@ -1,6 +1,4 @@
-﻿Imports System.Collections.Generic
-Imports JSql.Storage
-Imports LINQ
+﻿Imports LINQ
 
 Namespace Indexing
 
