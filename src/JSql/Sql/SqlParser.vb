@@ -1,5 +1,11 @@
-﻿Namespace Sql
+﻿Imports System.Collections.Generic
+Imports JSql.Storage
 
+Namespace Sql
+
+    ''' <summary>
+    ''' recursive-descent parser for the mysql-compatible sql subset supported by JSql
+    ''' </summary>
     Public Class SqlParser
 
         Private ReadOnly tokens As List(Of Token)
@@ -432,7 +438,526 @@
             Return left
         End Function
 
-        ' ARITHMETIC PARSING
+        Private Function ParseAdditive() As Expression
+            Dim left As Expression = ParseMultiplicative()
+
+            Do
+                Dim t As Token = tokens(p)
+                Dim op As BinaryOp? = Nothing
+
+                If t.IsSymbol("+") Then
+                    op = BinaryOp.Add
+                ElseIf t.IsSymbol("-") Then
+                    op = BinaryOp.Subtract
+                Else
+                    Exit Do
+                End If
+
+                p += 1
+
+                left = New BinaryExpression With {.Op = op.Value, .Left = left, .Right = ParseMultiplicative()}
+            Loop
+
+            Return left
+        End Function
+
+        Private Function ParseMultiplicative() As Expression
+            Dim left As Expression = ParseUnary()
+
+            Do
+                Dim t As Token = tokens(p)
+                Dim op As BinaryOp? = Nothing
+
+                If t.IsSymbol("*") Then
+                    op = BinaryOp.Multiply
+                ElseIf t.IsSymbol("/") Then
+                    op = BinaryOp.Divide
+                ElseIf t.IsSymbol("%") Then
+                    op = BinaryOp.Mod
+                Else
+                    Exit Do
+                End If
+
+                p += 1
+
+                left = New BinaryExpression With {.Op = op.Value, .Left = left, .Right = ParseUnary()}
+            Loop
+
+            Return left
+        End Function
+
+        Private Function ParseUnary() As Expression
+            Dim t As Token = tokens(p)
+
+            If t.IsSymbol("-") Then
+                p += 1
+                Return New UnaryExpression With {.Op = "-", .Operand = ParseUnary()}
+            ElseIf t.IsSymbol("+") Then
+                p += 1
+                Return ParseUnary()
+            End If
+
+            Return ParsePrimary()
+        End Function
+
+        Private Function ParsePrimary() As Expression
+            Dim t As Token = tokens(p)
+
+            If AcceptSymbol("(") Then
+                Dim inner As Expression = ParseExpression()
+                ExpectSymbol(")")
+                Return inner
+            End If
+
+            Select Case t.Kind
+                Case TokenKind.String
+                    p += 1
+                    Return New LiteralExpression(t.Text)
+
+                Case TokenKind.Number
+                    p += 1
+
+                    If t.Text.Contains(".") OrElse t.Text.Contains("e") OrElse t.Text.Contains("E") Then
+                        Return New LiteralExpression(CDbl(t.Text))
+                    Else
+                        Return New LiteralExpression(CLng(t.Text))
+                    End If
+            End Select
+
+            If t.Kind = TokenKind.Identifier Then
+                If t.IsKeyword("NULL") Then
+                    p += 1
+                    Return LiteralExpression.NullLiteral()
+                ElseIf t.IsKeyword("TRUE") Then
+                    p += 1
+                    Return New LiteralExpression(True)
+                ElseIf t.IsKeyword("FALSE") Then
+                    p += 1
+                    Return New LiteralExpression(False)
+                ElseIf t.IsKeyword("CASE") OrElse t.IsKeyword("INTERVAL") OrElse t.IsKeyword("CAST") Then
+                    Throw New SqlError("unsupported sql expression: " & t.Text, t.Position)
+                End If
+
+                ' aggregate function call
+                If tokens(p + 1).IsSymbol("(") Then
+                    Dim name As String = ExpectIdentifier()
+                    ExpectSymbol("(")
+
+                    Dim fn As New FunctionCallExpression With {.Name = name.ToUpper}
+
+                    If AcceptSymbol("*") Then
+                        fn.IsStar = True
+                        ExpectSymbol(")")
+                        Return fn
+                    End If
+
+                    Do
+                        fn.Args.Add(ParseExpression())
+
+                        If AcceptSymbol(",") Then
+                            Continue Do
+                        End If
+
+                        Exit Do
+                    Loop
+
+                    ExpectSymbol(")")
+                    Return fn
+                End If
+            End If
+
+            ' column reference: [qualifier.]column
+            If t.Kind = TokenKind.Identifier OrElse t.Kind = TokenKind.QuotedIdentifier Then
+                Dim first As String = ExpectIdentifier()
+
+                If AcceptSymbol(".") Then
+                    Return New IdentifierExpression(first, ExpectIdentifier())
+                End If
+
+                Return New IdentifierExpression(first)
+            End If
+
+            Throw New SqlError("unexpected token '" & t.Text & "' in expression!", t.Position)
+        End Function
+
+        Private Function ParseExpressionList() As List(Of Expression)
+            ExpectSymbol("(")
+
+            Dim list As New List(Of Expression)
+
+            Do
+                list.Add(ParseExpression())
+
+                If Not AcceptSymbol(",") Then
+                    Exit Do
+                End If
+            Loop
+
+            ExpectSymbol(")")
+            Return list
+        End Function
+
+        Private Function ParseInsert() As InsertStatement
+            ExpectKeyword("INSERT")
+
+            Dim stmt As New InsertStatement
+
+            AcceptKeyword("LOW_PRIORITY")
+            AcceptKeyword("IGNORE")
+
+            If AcceptKeyword("INTO") Then
+                ' nothing to do, INTO is optional in mysql-ish dialects
+            End If
+
+            stmt.Table = ExpectIdentifier()
+
+            If AcceptSymbol("(") Then
+                stmt.Columns = New List(Of String)
+
+                Do
+                    stmt.Columns.Add(ExpectIdentifier())
+
+                    If Not AcceptSymbol(",") Then
+                        Exit Do
+                    End If
+                Loop
+
+                ExpectSymbol(")")
+            End If
+
+            ExpectKeyword("VALUES")
+
+            Do
+                Dim row As New List(Of Expression)
+
+                ExpectSymbol("(")
+
+                Do
+                    row.Add(ParseExpression())
+
+                    If Not AcceptSymbol(",") Then
+                        Exit Do
+                    End If
+                Loop
+
+                ExpectSymbol(")")
+                stmt.ValueRows.Add(row)
+
+                If Not AcceptSymbol(",") Then
+                    Exit Do
+                End If
+            Loop
+
+            Return stmt
+        End Function
+
+        Private Function ParseUpdate() As UpdateStatement
+            ExpectKeyword("UPDATE")
+
+            Dim stmt As New UpdateStatement
+
+            stmt.Table = ExpectIdentifier()
+
+            If AcceptKeyword("AS") Then ExpectIdentifier()
+
+            ExpectKeyword("SET")
+
+            Do
+                Dim a As New Assignment
+
+                a.Column = ExpectIdentifier()
+                ExpectSymbol("=")
+                a.Value = ParseExpression()
+                stmt.Assignments.Add(a)
+
+                If Not AcceptSymbol(",") Then
+                    Exit Do
+                End If
+            Loop
+
+            If AcceptKeyword("WHERE") Then
+                stmt.Where = ParseExpression()
+            End If
+
+            If AcceptKeyword("LIMIT") Then
+                Throw New SqlError("UPDATE ... LIMIT is not supported yet!", tokens(p).Position)
+            End If
+
+            Return stmt
+        End Function
+
+        Private Function ParseDelete() As DeleteStatement
+            ExpectKeyword("DELETE")
+            ExpectKeyword("FROM")
+
+            Dim stmt As New DeleteStatement
+
+            stmt.Table = ExpectIdentifier()
+
+            If AcceptKeyword("WHERE") Then
+                stmt.Where = ParseExpression()
+            End If
+
+            Return stmt
+        End Function
+
+        Private Function ParseCreate() As CreateStatement
+            ExpectKeyword("CREATE")
+
+            Dim stmt As New CreateStatement
+
+            If AcceptKeyword("TEMPORARY") Then
+                ' ignored: everything stays file based
+            End If
+
+            If AcceptKeyword("DATABASE") OrElse AcceptKeyword("SCHEMA") Then
+                stmt.Kind = CreateKind.Database
+            ElseIf AcceptKeyword("TABLE") Then
+                stmt.Kind = CreateKind.Table
+            ElseIf AcceptKeyword("UNIQUE") Then
+                ExpectKeyword("INDEX")
+                stmt.Kind = CreateKind.Index
+            ElseIf AcceptKeyword("INDEX") OrElse AcceptKeyword("KEY") Then
+                stmt.Kind = CreateKind.Index
+            Else
+                Throw Err("unsupported CREATE object, only DATABASE/TABLE/INDEX are supported!")
+            End If
+
+            If AcceptKeyword("IF") Then
+                ExpectKeyword("NOT")
+                ExpectKeyword("EXISTS")
+                stmt.IfNotExists = True
+            End If
+
+            stmt.Name = ExpectIdentifier()
+
+            If stmt.Kind = CreateKind.Table Then
+                stmt.Columns = ParseColumnDefinitions()
+                ' optional table options are skipped
+                SkipTrailingOptions()
+            ElseIf stmt.Kind = CreateKind.Index Then
+                ExpectKeyword("ON")
+                stmt.OnTable = ExpectIdentifier()
+                ExpectSymbol("(")
+                stmt.OnColumn = ExpectIdentifier()
+                ExpectSymbol(")")
+
+                If AcceptKeyword("USING") Then
+                    stmt.IndexKind = ExpectIdentifier().ToUpper
+                End If
+            End If
+
+            Return stmt
+        End Function
+
+        Private Function ParseColumnDefinitions() As List(Of ColumnDef)
+            ExpectSymbol("(")
+
+            Dim cols As New List(Of ColumnDef)
+
+            Do
+                Dim t As Token = tokens(p)
+
+                If t.IsKeyword("PRIMARY") OrElse t.IsKeyword("UNIQUE") OrElse t.IsKeyword("KEY") OrElse
+                   t.IsKeyword("INDEX") OrElse t.IsKeyword("CONSTRAINT") OrElse t.IsKeyword("FOREIGN") Then
+                    Throw Err("inline table constraints are not supported yet, declare them on the column instead!")
+                End If
+
+                cols.Add(ParseColumnDef())
+
+                If Not AcceptSymbol(",") Then
+                    Exit Do
+                End If
+            Loop
+
+            ExpectSymbol(")")
+
+            If cols.Count = 0 Then
+                Throw Err("empty column list in CREATE TABLE!")
+            End If
+
+            Return cols
+        End Function
+
+        Private Function ParseColumnDef() As ColumnDef
+            Dim col As New ColumnDef
+
+            col.Name = ExpectIdentifier()
+
+            Dim typeText As String = ExpectIdentifier()
+
+            ' optional type arguments: VARCHAR(255), DECIMAL(10,2)
+            If AcceptSymbol("(") Then
+                typeText &= "("
+
+                Do
+                    typeText &= tokens(p).Text
+                    p += 1
+
+                    If Not AcceptSymbol(",") Then
+                        Exit Do
+                    End If
+
+                    typeText &= ","
+                Loop
+
+                ExpectSymbol(")")
+                typeText &= ")"
+            End If
+
+            AcceptKeyword("UNSIGNED")
+
+            col.RawType = typeText
+
+            Try
+                col.TypeName = SqlTypes.NormalizeType(typeText.Split("("c)(0))
+            Catch ex As Exception
+                Throw New SqlError("unsupported column type: " & typeText, tokens(p).Position)
+            End Try
+
+            Do
+                If AcceptKeyword("NOT") Then
+                    ExpectKeyword("NULL")
+                    col.NotNull = True
+                ElseIf AcceptKeyword("NULL") Then
+                    col.NotNull = False
+                ElseIf AcceptKeyword("PRIMARY") Then
+                    ExpectKeyword("KEY")
+                    col.PrimaryKey = True
+                    col.NotNull = True
+                ElseIf AcceptKeyword("UNIQUE") Then
+                    ' ignored by this experimental engine
+                ElseIf AcceptKeyword("AUTO_INCREMENT") OrElse AcceptKeyword("AUTOINCREMENT") Then
+                    ' ignored: no auto value generator yet
+                ElseIf AcceptKeyword("DEFAULT") Then
+                    col.DefaultValue = ParseDefaultLiteral()
+                Else
+                    Exit Do
+                End If
+            Loop
+
+            Return col
+        End Function
+
+        Private Function ParseDefaultLiteral() As Object
+            Dim t As Token = tokens(p)
+
+            Select Case t.Kind
+                Case TokenKind.String
+                    p += 1
+                    Return t.Text
+                Case TokenKind.Number
+                    p += 1
+
+                    If t.Text.Contains(".") Then
+                        Return CDbl(t.Text)
+                    Else
+                        Return CLng(t.Text)
+                    End If
+            End Select
+
+            If t.IsKeyword("NULL") Then
+                p += 1
+                Return Nothing
+            ElseIf t.IsKeyword("TRUE") Then
+                p += 1
+                Return True
+            ElseIf t.IsKeyword("FALSE") Then
+                p += 1
+                Return False
+            End If
+
+            Throw New SqlError("unsupported DEFAULT value: " & t.Text, t.Position)
+        End Function
+
+        Private Sub SkipTrailingOptions()
+            ' ENGINE=..., CHARSET=..., COMMENT=... are parsed away
+            Do While tokens(p).Kind = TokenKind.Identifier
+                If IsClauseStart(tokens(p)) Then
+                    Exit Do
+                End If
+
+                p += 1
+
+                If AcceptSymbol("=") Then
+                    p += 1
+                End If
+            Loop
+        End Sub
+
+        Private Function ParseDrop() As DropStatement
+            ExpectKeyword("DROP")
+
+            Dim stmt As New DropStatement
+
+            If AcceptKeyword("TEMPORARY") Then
+                ' ignored
+            End If
+
+            If AcceptKeyword("TABLE") Then
+                stmt.Kind = DropKind.Table
+            ElseIf AcceptKeyword("INDEX") OrElse AcceptKeyword("KEY") Then
+                stmt.Kind = DropKind.Index
+            ElseIf AcceptKeyword("DATABASE") OrElse AcceptKeyword("SCHEMA") Then
+                stmt.Kind = DropKind.Database
+            Else
+                Throw Err("unsupported DROP object, only DATABASE/TABLE/INDEX are supported!")
+            End If
+
+            If AcceptKeyword("IF") Then
+                ExpectKeyword("EXISTS")
+                stmt.IfExists = True
+            End If
+
+            stmt.Name = ExpectIdentifier()
+
+            If stmt.Kind = DropKind.Index Then
+                ExpectKeyword("ON")
+                stmt.OnTable = ExpectIdentifier()
+            End If
+
+            Return stmt
+        End Function
+
+        Private Function ParseShow() As ShowStatement
+            ExpectKeyword("SHOW")
+
+            Dim stmt As New ShowStatement
+
+            If AcceptKeyword("DATABASES") OrElse AcceptKeyword("SCHEMAS") Then
+                stmt.Kind = ShowKind.Databases
+                Return stmt
+            End If
+
+            If AcceptKeyword("CREATE") Then
+                Throw Err("SHOW CREATE is not supported yet, use DESCRIBE instead!")
+            End If
+
+            If AcceptKeyword("INDEX") OrElse AcceptKeyword("INDEXES") OrElse AcceptKeyword("KEYS") Then
+                stmt.Kind = ShowKind.Indexes
+                AcceptKeyword("FROM")
+                AcceptKeyword("IN")
+                stmt.Target = ExpectIdentifier()
+                Return stmt
+            End If
+
+            If AcceptKeyword("COLUMNS") OrElse AcceptKeyword("FIELDS") Then
+                stmt.Kind = ShowKind.Columns
+                AcceptKeyword("FROM")
+                AcceptKeyword("IN")
+                stmt.Target = ExpectIdentifier()
+                Return stmt
+            End If
+
+            ExpectKeyword("TABLES")
+            stmt.Kind = ShowKind.Tables
+
+            If AcceptKeyword("FROM") OrElse AcceptKeyword("IN") Then
+                stmt.Target = ExpectIdentifier()
+            End If
+
+            Return stmt
+        End Function
 
     End Class
 End Namespace
