@@ -855,6 +855,8 @@ Namespace Sql
             col.Name = ExpectIdentifier()
 
             Dim typeText As String = ExpectIdentifier()
+            ' the bare type name, used to resolve the canonical sql type
+            Dim baseType As String = typeText
 
             ' optional type arguments: VARCHAR(255), DECIMAL(10,2)
             If AcceptSymbol("(") Then
@@ -885,7 +887,7 @@ Namespace Sql
             col.RawType = typeText
 
             Try
-                col.TypeName = SqlTypes.NormalizeType(typeText.Split("("c)(0))
+                col.TypeName = SqlTypes.NormalizeType(baseType)
             Catch ex As Exception
                 Throw New SqlError("unsupported column type: " & typeText, tokens(p).Position)
             End Try

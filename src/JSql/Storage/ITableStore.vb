@@ -20,6 +20,13 @@ Namespace Storage
                 raw = raw.Substring(0, p).Trim()
             End If
 
+            ' drop the trailing type attributes: "int unsigned" -> "int"
+            Dim parts As String() = raw.Split(New Char() {" "c, ControlChars.Tab}, StringSplitOptions.RemoveEmptyEntries)
+
+            If parts.Length > 1 Then
+                raw = parts(0)
+            End If
+
             Dim t As String = raw.ToLower
 
             Select Case t
