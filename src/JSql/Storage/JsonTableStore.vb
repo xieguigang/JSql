@@ -29,18 +29,18 @@ Namespace Storage
         End Property
 
         Public Function Read(filePath As String) As StoredTable Implements ITableStore.Read
-            Dim json As String = File.ReadAllText(filePath)
-            Dim file As JsonTableFile = JsonSerializer.Deserialize(Of JsonTableFile)(json, s_jsonOptions)
+            Dim json As String = System.IO.File.ReadAllText(filePath)
+            Dim tableFile As JsonTableFile = JsonSerializer.Deserialize(Of JsonTableFile)(json, s_jsonOptions)
 
-            If file Is Nothing OrElse file.columns Is Nothing Then
+            If tableFile Is Nothing OrElse tableFile.columns Is Nothing Then
                 Throw New InvalidDataException($"invalid json table file: {filePath}")
             End If
 
             Dim table As New StoredTable With {
-                .Schema = New TableSchema With {.TableName = file.table}
+                .Schema = New TableSchema With {.TableName = tableFile.table}
             }
 
-            For Each col In file.columns
+            For Each col In tableFile.columns
                 table.Schema.Columns.Add(New ColumnDef With {
                     .Name = col.name,
                     .TypeName = SqlTypes.NormalizeType(col.type),
@@ -51,8 +51,8 @@ Namespace Storage
                 })
             Next
 
-            If file.rows IsNot Nothing Then
-                For Each row In file.rows
+            If tableFile.rows IsNot Nothing Then
+                For Each row In tableFile.rows
                     Dim r As New Dictionary(Of String, Object)(StringComparer.OrdinalIgnoreCase)
 
                     If row IsNot Nothing Then
@@ -69,12 +69,12 @@ Namespace Storage
         End Function
 
         Public Sub Write(filePath As String, table As StoredTable) Implements ITableStore.Write
-            Dim file As New JsonTableFile With {
+            Dim tableFile As New JsonTableFile With {
                 .table = table.Schema.TableName
             }
 
             For Each col In table.Schema.Columns
-                file.columns.Add(New JsonColumn With {
+                tableFile.columns.Add(New JsonColumn With {
                     .name = col.Name,
                     .type = col.RawType,
                     .notNull = col.NotNull,
@@ -83,18 +83,18 @@ Namespace Storage
                 })
             Next
 
-            file.rows = table.Rows
+            tableFile.rows = table.Rows
 
-            Dim json As String = JsonSerializer.Serialize(file, s_jsonOptions)
+            Dim json As String = JsonSerializer.Serialize(tableFile, s_jsonOptions)
             Dim tmpPath As String = filePath & ".tmp"
 
-            File.WriteAllText(tmpPath, json, New UTF8Encoding(False))
+            System.IO.File.WriteAllText(tmpPath, json, New UTF8Encoding(False))
 
-            If File.Exists(filePath) Then
-                File.Delete(filePath)
+            If System.IO.File.Exists(filePath) Then
+                System.IO.File.Delete(filePath)
             End If
 
-            File.Move(tmpPath, filePath)
+            System.IO.File.Move(tmpPath, filePath)
         End Sub
 
         ''' <summary>
@@ -115,8 +115,9 @@ Namespace Storage
             Select Case je.ValueKind
                 Case JsonValueKind.String : Return je.GetString()
                 Case JsonValueKind.Number
-                    If je.TryGetInt64() Then
-                        Return je.GetInt64()
+                    Dim int64Value As Long = 0
+                    If je.TryGetInt64(int64Value) Then
+                        Return int64Value
                     Else
                         Return je.GetDouble()
                     End If

@@ -1,4 +1,4 @@
-﻿Imports System.Collections.Generic
+Imports System.Collections.Generic
 Imports JSql.Indexing
 Imports JSql.Sql
 Imports JSql.Storage
@@ -125,28 +125,28 @@ Namespace Engine
             Next
 
             For j As Integer = 0 To joins.Count - 1
-                Dim right As TableRef = refs(j + 1)
+                Dim rhs As TableRef = refs(j + 1)
                 Dim jc As JoinClause = joins(j)
                 Dim merged As New List(Of RowScope)
 
-                For Each left In scopes
+                For Each lhs In scopes
                     Dim matched As Boolean = False
 
-                    For Each row In right.Rows
-                        Dim probe As RowScope = left.Clone()
-                        probe.Add(right.AliasName, row)
+                    For Each row In rhs.Rows
+                        Dim probe As RowScope = lhs.Clone()
+                        probe.Add(rhs.AliasName, row)
 
                         If jc.On Is Nothing OrElse ExpressionEvaluator.IsTrue(New ExpressionEvaluator(probe).Eval(jc.On)) Then
-                            Dim keep As RowScope = left.Clone()
-                            keep.Add(right.AliasName, row)
+                            Dim keep As RowScope = lhs.Clone()
+                            keep.Add(rhs.AliasName, row)
                             merged.Add(keep)
                             matched = True
                         End If
                     Next
 
-                    If Not matched AndAlso jc.JoinType = "LEFT" Then
-                        Dim keep As RowScope = left.Clone()
-                        keep.Add(right.AliasName, Nothing)
+                    If Not matched AndAlso jc.JoinType = "lhs" Then
+                        Dim keep As RowScope = lhs.Clone()
+                        keep.Add(rhs.AliasName, Nothing)
                         merged.Add(keep)
                     End If
                 Next

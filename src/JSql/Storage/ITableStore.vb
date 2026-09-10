@@ -205,7 +205,7 @@ Namespace Storage
         Public Shared Function GetStore(filePath As String) As ITableStore
             Dim ext As String = Path.GetExtension(filePath)
 
-            If ext.IsNullOrEmpty Then
+            If String.IsNullOrEmpty(ext) Then
                 ext = ".json"
             End If
 

@@ -1,4 +1,4 @@
-﻿Imports System.Collections.Generic
+Imports System.Collections.Generic
 Imports JSql.Indexing
 Imports JSql.Sql
 Imports JSql.Storage
@@ -25,12 +25,12 @@ Namespace Engine
         ''' <summary>
         ''' parse and run one sql statement, throws <see cref="SqlError"/> on failure.
         ''' </summary>
-        Public Function Execute(sql As String) As ResultSet
-            If String.IsNullOrWhiteSpace(sql) Then
+        Public Function Execute(statementText As String) As ResultSet
+            If String.IsNullOrWhiteSpace(statementText) Then
                 Throw New SqlError("empty sql statement!")
             End If
 
-            Return ExecuteStatement(New SqlParser(sql).ParseStatement())
+            Return ExecuteStatement(New SqlParser(statementText).ParseStatement())
         End Function
 
         Public Function ExecuteStatement(stmt As SqlStatement) As ResultSet
@@ -61,12 +61,12 @@ Namespace Engine
         Public Function ExecuteBatch(script As String) As List(Of ResultSet)
             Dim results As New List(Of ResultSet)
 
-            For Each sql In SplitStatements(script)
-                If String.IsNullOrWhiteSpace(sql) Then
+            For Each statementText In SplitStatements(script)
+                If String.IsNullOrWhiteSpace(statementText) Then
                     Continue For
                 End If
 
-                results.Add(Execute(sql))
+                results.Add(Execute(statementText))
             Next
 
             Return results

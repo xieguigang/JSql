@@ -1,4 +1,4 @@
-﻿Imports System
+Imports System
 Imports System.Collections.Generic
 Imports System.IO
 Imports System.Text
@@ -34,7 +34,7 @@ Module Program
         Dim engine As New SqlEngine(root)
 
         Console.OutputEncoding = New UTF8Encoding(False)
-        Console.WriteLine("JSql 0.1 - an experimental sql engine over json files")
+        Console.WriteLine("JSql 0.1 - an experimental sqlText engine over json files")
         Console.WriteLine("data root: " & root)
         Console.WriteLine("type 'help' for the meta commands, 'quit' to leave.")
         Console.WriteLine()
@@ -86,31 +86,31 @@ Module Program
 
             buffer.Append(line)
 
-            Dim sql As String = buffer.ToString()
+            Dim sqlText As String = buffer.ToString()
 
-            If Not IsComplete(sql) Then
+            If Not IsComplete(sqlText) Then
                 prompt = "    -> "
                 Continue Do
             End If
 
-            RunStatement(engine, sql)
+            RunStatement(engine, sqlText)
             buffer.Clear()
             prompt = "jsql> "
         Loop
     End Sub
 
-    Private Function IsComplete(sql As String) As Boolean
-        If SqlEngine.SplitStatements(sql).LastOrDefault().Trim().EndsWith(";") Then
+    Private Function IsComplete(sqlText As String) As Boolean
+        If SqlEngine.SplitStatements(sqlText).LastOrDefault().Trim().EndsWith(";") Then
             ' the trailing semicolon marks the end of one statement
-            Return SqlEngine.SplitStatements(sql).Any(Function(s) s.Trim().EndsWith(";"))
+            Return SqlEngine.SplitStatements(sqlText).Any(Function(s) s.Trim().EndsWith(";"))
         End If
 
-        Return sql.Trim().EndsWith(";")
+        Return sqlText.Trim().EndsWith(";")
     End Function
 
-    Private Sub RunStatement(engine As SqlEngine, sql As String)
+    Private Sub RunStatement(engine As SqlEngine, sqlText As String)
         Try
-            For Each statement As String In SqlEngine.SplitStatements(sql)
+            For Each statement As String In SqlEngine.SplitStatements(sqlText)
                 If statement.Trim().Length = 0 Then
                     Continue For
                 End If
@@ -126,7 +126,7 @@ Module Program
             Next
         Catch ex As SqlError
             Console.ForegroundColor = ConsoleColor.Red
-            Console.WriteLine("sql error: " & ex.Message)
+            Console.WriteLine("sqlText error: " & ex.Message)
             Console.ResetColor()
         Catch ex As Exception
             Console.ForegroundColor = ConsoleColor.Red
@@ -136,7 +136,6 @@ Module Program
 
         Console.WriteLine()
     End Sub
-End Module
 
     Private Function CellText(v As Object) As String
         If v Is Nothing Then

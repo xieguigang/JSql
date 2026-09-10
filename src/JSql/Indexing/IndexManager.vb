@@ -1,4 +1,4 @@
-﻿Imports System.Collections.Generic
+Imports System.Collections.Generic
 Imports JSql.Sql
 Imports JSql.Storage
 Imports LINQ
@@ -137,14 +137,14 @@ Namespace Indexing
             Dim sets As TableIndexSet = GetIndexSet(db, table)
             Dim memory As New JsonMemoryIndex(stored.Rows)
 
-            For Each info In sets.Indexes
-                Select Case info.Kind
+            For Each columnIndex In sets.Indexes
+                Select Case columnIndex.Kind
                     Case IndexKind.Hash
-                        Call memory.BuildHash(info.Column)
+                        Call memory.BuildHash(columnIndex.Column)
                     Case IndexKind.Range
-                        Call memory.BuildRange(info.Column, RangeType(info.ValueType))
+                        Call memory.BuildRange(columnIndex.Column, RangeType(columnIndex.ValueType))
                     Case IndexKind.FullText
-                        Call memory.BuildFullText(info.Column)
+                        Call memory.BuildFullText(columnIndex.Column)
                 End Select
             Next
 
@@ -193,51 +193,48 @@ Namespace Indexing
 
             Dim sets As TableIndexSet = GetIndexSet(db, table)
             Dim kind As IndexKind = ParseKind(kindText)
-            Dim info As New ColumnIndexInfo With {
+            Dim columnIndex As New ColumnIndexInfo With {
                 .Name = name,
                 .Column = column,
                 .Kind = kind,
                 .ValueType = If(kind = IndexKind.Range, RangeTypeOf(stored.Schema, column).Name, "String")
             }
 
-            sets.Indexes.Add(info)
+            sets.Indexes.Add(columnIndex)
             Invalidate(db, table)
-            Persist(db, table, info, EnsureBuilt(db, table, stored), stored.Rows.Count, catalog.DatabaseDir(db))
-            Return info
+            Persist(db, table, columnIndex, EnsureBuilt(db, table, stored), stored.Rows.Count, catalog.DatabaseDir(db))
+            Return columnIndex
         End Function
 
-        Private Function Persist(db As String, table As String, info As ColumnIndexInfo,
+        Private Function Persist(db As String, table As String, columnIndex As ColumnIndexInfo,
                                  memory As JsonMemoryIndex, rowCount As Integer, dbDir As String) As String
             Dim archive As New IndexArchive With {
-                .name = info.Name,
+                .name = columnIndex.Name,
                 .table = table,
-                .column = info.Column,
-                .kind = info.KindText(),
-                .valueType = info.ValueType,
+                .column = columnIndex.Column,
+                .kind = columnIndex.KindText(),
+                .valueType = columnIndex.ValueType,
                 .rowCount = rowCount,
-                .documents = memory.ColumnText(info.Column).ToList()
+                .documents = memory.ColumnText(columnIndex.Column).ToList()
             }
 
-            If info.Kind = IndexKind.Hash Then
-                archive.hashMaps = memory.TermIndex(info.Column).GetHashIndex()
-                archive.documentMaps = memory.TermIndex(info.Column).GetDocumentMaps()
+            If columnIndex.Kind = IndexKind.Hash Then
+                archive.hashMaps = memory.TermIndex(columnIndex.Column).GetHashIndex()
+                archive.documentMaps = memory.TermIndex(columnIndex.Column).GetDocumentMaps()
             End If
 
             Return IndexPersistence.Save(archive, dbDir)
         End Function
-    End Class
-End Namespace
-
 
         Public Function DropIndex(db As String, table As String, name As String) As Boolean
             Dim sets As TableIndexSet = GetIndexSet(db, table)
-            Dim info As ColumnIndexInfo = sets.FindByName(name)
+            Dim columnIndex As ColumnIndexInfo = sets.FindByName(name)
 
-            If info Is Nothing Then
+            If columnIndex Is Nothing Then
                 Return False
             End If
 
-            sets.Indexes.Remove(info)
+            sets.Indexes.Remove(columnIndex)
             Invalidate(db, table)
             Return IndexPersistence.DropOne(catalog.DatabaseDir(db), table, name)
         End Function
@@ -264,8 +261,8 @@ End Namespace
             Dim memory As JsonMemoryIndex = EnsureBuilt(db, table, stored)
             Dim dbDir As String = catalog.DatabaseDir(db)
 
-            For Each info In sets.Indexes
-                Call Persist(db, table, info, memory, stored.Rows.Count, dbDir)
+            For Each columnIndex In sets.Indexes
+                Call Persist(db, table, columnIndex, memory, stored.Rows.Count, dbDir)
             Next
         End Sub
         ' ==================== index probing ====================
@@ -353,16 +350,16 @@ End Namespace
                     Return Nothing
                 End If
 
-                Dim info As ColumnIndexInfo = sets.FindByColumn(column, IndexKind.Range)
+                Dim columnIndex As ColumnIndexInfo = sets.FindByColumn(column, IndexKind.Range)
 
-                If info Is Nothing Then
+                If columnIndex Is Nothing Then
                     Return Nothing
                 End If
 
                 Return New Query With {
                     .search = Query.Type.ValueRange,
                     .field = column,
-                    .value = RangePair(info, ConstValue(bt.Low), ConstValue(bt.High))
+                    .value = RangePair(columnIndex, ConstValue(bt.Low), ConstValue(bt.High))
                 }
             End If
 
@@ -487,30 +484,30 @@ End Namespace
             Return DirectCast(expr, LiteralExpression).Value
         End Function
 
-        Private Shared Function RangeTypeOf(info As ColumnIndexInfo) As Type
-            Select Case info.ValueType
+        Private Shared Function RangeTypeOf(columnIndex As ColumnIndexInfo) As Type
+            Select Case columnIndex.ValueType
                 Case "Integer" : Return GetType(Integer)
                 Case "Date" : Return GetType(Date)
                 Case Else : Return GetType(Double)
             End Select
         End Function
 
-        Private Shared Function RangeScalar(info As ColumnIndexInfo, value As Object) As Object
+        Private Shared Function RangeScalar(columnIndex As ColumnIndexInfo, value As Object) As Object
             Try
                 If TypeOf value Is Date Then
-                    Return If(info.ValueType = "Date", CObj(CDate(value)), Nothing)
+                    Return If(columnIndex.ValueType = "Date", CObj(CDate(value)), Nothing)
                 End If
 
                 Dim n As Double = Convert.ToDouble(value)
 
-                If info.ValueType = "Integer" Then
+                If columnIndex.ValueType = "Integer" Then
                     ' only whole numbers can be mapped onto an integer index
                     If Math.Round(n) <> n OrElse n < Integer.MinValue OrElse n > Integer.MaxValue Then
                         Return Nothing
                     End If
 
                     Return CInt(n)
-                ElseIf info.ValueType = "Date" Then
+                ElseIf columnIndex.ValueType = "Date" Then
                     If TypeOf value Is String Then
                         Dim d As Date
 
@@ -529,30 +526,30 @@ End Namespace
         End Function
 
         ''' <summary>build the typed [min,max] array that the LINQ range index expects</summary>
-        Private Shared Function RangePair(info As ColumnIndexInfo, min As Object, max As Object) As Object
-            If RangeTypeOf(info) Is GetType(Integer) Then
+        Private Shared Function RangePair(columnIndex As ColumnIndexInfo, min As Object, max As Object) As Object
+            If RangeTypeOf(columnIndex) Is GetType(Integer) Then
                 Return New Integer() {CInt(min), CInt(max)}
-            ElseIf RangeTypeOf(info) Is GetType(Date) Then
+            ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
                 Return New Date() {CDate(min), CDate(max)}
             Else
                 Return New Double() {CDbl(min), CDbl(max)}
             End If
         End Function
 
-        Private Shared Function MinValue(info As ColumnIndexInfo) As Object
-            If RangeTypeOf(info) Is GetType(Integer) Then
+        Private Shared Function MinValue(columnIndex As ColumnIndexInfo) As Object
+            If RangeTypeOf(columnIndex) Is GetType(Integer) Then
                 Return Integer.MinValue
-            ElseIf RangeTypeOf(info) Is GetType(Date) Then
+            ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
                 Return New Date(1900, 1, 1)
             Else
                 Return -1.7E+308
             End If
         End Function
 
-        Private Shared Function MaxValue(info As ColumnIndexInfo) As Object
-            If RangeTypeOf(info) Is GetType(Integer) Then
+        Private Shared Function MaxValue(columnIndex As ColumnIndexInfo) As Object
+            If RangeTypeOf(columnIndex) Is GetType(Integer) Then
                 Return Integer.MaxValue
-            ElseIf RangeTypeOf(info) Is GetType(Date) Then
+            ElseIf RangeTypeOf(columnIndex) Is GetType(Date) Then
                 Return New Date(9999, 12, 31)
             Else
                 Return 1.7E+308

@@ -9,7 +9,7 @@ Namespace Engine
 
         Public Property Tables As New Dictionary(Of String, Dictionary(Of String, Object))(StringComparer.OrdinalIgnoreCase)
 
-        Public Sub Add(Optional aliasName As String = Nothing, row As Dictionary(Of String, Object) = Nothing)
+        Public Sub Add(Optional aliasName As String = Nothing, Optional row As Dictionary(Of String, Object) = Nothing)
             If aliasName Is Nothing Then
                 aliasName = If(Tables.Count = 0, "@ROW", "@T" & Tables.Count)
             End If

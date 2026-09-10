@@ -1,4 +1,4 @@
-﻿Imports System.Collections.Generic
+Imports System.Collections.Generic
 Imports System.IO
 Imports System.Text
 Imports System.Text.Json
@@ -74,11 +74,11 @@ Namespace Indexing
 
             Dim suffix As String = "_" & Safe(table) & "_"
 
-            For Each file As String In Directory.GetFiles(dir, "*.idx")
+            For Each file As String In System.IO.Directory.GetFiles(dir, "*.idx")
                 Dim archive As IndexArchive = Nothing
 
                 Try
-                    archive = JsonSerializer.Deserialize(Of IndexArchive)(File.ReadAllText(file), jsonOptions)
+                    archive = JsonSerializer.Deserialize(Of IndexArchive)(System.IO.File.ReadAllText(file), jsonOptions)
                 Catch ex As Exception
                     Console.Error.WriteLine("[index] broken index file skipped: " & file & " -> " & ex.Message)
                     Continue For
@@ -101,9 +101,9 @@ Namespace Indexing
                 Return list
             End If
 
-            For Each file As String In Directory.GetFiles(dir, "*.idx")
+            For Each file As String In System.IO.Directory.GetFiles(dir, "*.idx")
                 Try
-                    list.Add(JsonSerializer.Deserialize(Of IndexArchive)(File.ReadAllText(file), jsonOptions))
+                    list.Add(JsonSerializer.Deserialize(Of IndexArchive)(System.IO.File.ReadAllText(file), jsonOptions))
                 Catch ex As Exception
                     Console.Error.WriteLine("[index] broken index file skipped: " & file & " -> " & ex.Message)
                 End Try
@@ -125,7 +125,7 @@ Namespace Indexing
             Dim json As String = JsonSerializer.Serialize(archive, jsonOptions)
             Dim file As String = GetPath(dbDir, archive.table, archive.column, archive.kind)
 
-            File.WriteAllText(file, json, New UTF8Encoding(False))
+            System.IO.File.WriteAllText(file, json, New UTF8Encoding(False))
             Return file
         End Function
 
@@ -136,15 +136,15 @@ Namespace Indexing
                 Return
             End If
 
-            For Each file As String In Directory.GetFiles(dir, "*.idx")
+            For Each file As String In System.IO.Directory.GetFiles(dir, "*.idx")
                 Try
-                    Dim archive = JsonSerializer.Deserialize(Of IndexArchive)(File.ReadAllText(file), jsonOptions)
+                    Dim archive = JsonSerializer.Deserialize(Of IndexArchive)(System.IO.File.ReadAllText(file), jsonOptions)
 
                     If archive IsNot Nothing AndAlso String.Equals(archive.table, table, StringComparison.OrdinalIgnoreCase) Then
-                        File.Delete(file)
+                        System.IO.File.Delete(file)
                     End If
                 Catch ex As Exception
-                    File.Delete(file)
+                    System.IO.File.Delete(file)
                 End Try
             Next
         End Sub
@@ -156,14 +156,14 @@ Namespace Indexing
                 Return False
             End If
 
-            For Each file As String In Directory.GetFiles(dir, "*.idx")
+            For Each file As String In System.IO.Directory.GetFiles(dir, "*.idx")
                 Try
-                    Dim archive = JsonSerializer.Deserialize(Of IndexArchive)(File.ReadAllText(file), jsonOptions)
+                    Dim archive = JsonSerializer.Deserialize(Of IndexArchive)(System.IO.File.ReadAllText(file), jsonOptions)
 
                     If archive IsNot Nothing AndAlso
                        String.Equals(archive.name, name, StringComparison.OrdinalIgnoreCase) AndAlso
                        String.Equals(archive.table, table, StringComparison.OrdinalIgnoreCase) Then
-                        File.Delete(file)
+                        System.IO.File.Delete(file)
                         Return True
                     End If
                 Catch ex As Exception
