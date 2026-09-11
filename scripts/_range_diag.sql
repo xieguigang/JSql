@@ -1,0 +1,7 @@
+USE rng;
+SELECT id, v FROM n;
+SELECT id FROM n WHERE v > 5;
+SELECT id FROM n WHERE v < 55;
+SELECT id FROM n WHERE v > 5 AND v < 55;
+SELECT id FROM n WHERE v > 5 AND v < 50;
+SELECT id FROM n WHERE v >= 10 AND v <= 50;
