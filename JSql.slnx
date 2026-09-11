@@ -17,6 +17,9 @@
   <Project Path="src/JSql/JSql.vbproj">
     <Platform Solution="*|x64" Project="x64" />
   </Project>
+  <Project Path="src/Repl/Repl.vbproj" Id="cf2c4e07-cee4-4b79-9840-4996ade07785">
+    <Platform Solution="Debug|x64" Project="x64" />
+  </Project>
   <Project Path="test/test.vbproj" Id="c8901392-09ea-4ccb-b7ad-3dfd5df9285e">
     <Platform Solution="Debug|x64" Project="x64" />
   </Project>
