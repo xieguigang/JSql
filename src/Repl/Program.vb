@@ -2,6 +2,7 @@ Imports System.IO
 Imports System.Text
 Imports JSql.Engine
 Imports JSql.Sql
+Imports JSql.Sqlite
 Imports JSql.Storage
 
 Module Program
@@ -103,20 +104,76 @@ Module Program
         End Select
     End Function
 
+    ''' <summary>
+    ''' pick the physical storage backend: --backend / --engine &lt;text|sqlite&gt;.
+    ''' text (jsonl/csv folder layout) is the default.
+    ''' </summary>
+    Private Function PickBackend(args As String()) As String
+        For i As Integer = 0 To args.Length - 1
+            Dim a As String = args(i)
+
+            If a.StartsWith("--backend=", StringComparison.OrdinalIgnoreCase) Then
+                Return NormalizeBackend(a.Substring("--backend=".Length))
+            End If
+
+            If a.StartsWith("--engine=", StringComparison.OrdinalIgnoreCase) Then
+                Return NormalizeBackend(a.Substring("--engine=".Length))
+            End If
+
+            If a = "--backend" OrElse a = "--engine" Then
+                If i + 1 < args.Length Then
+                    Return NormalizeBackend(args(i + 1))
+                End If
+            End If
+        Next
+
+        Return "text"
+    End Function
+
+    Private Function NormalizeBackend(text As String) As String
+        Select Case If(text, "").Trim().ToLowerInvariant()
+            Case "sqlite", "sqlite3", "db"
+                Return "sqlite"
+            Case Else
+                Return "text"
+        End Select
+    End Function
+
+    ''' <summary>
+    ''' construct the engine with the requested storage backend: the sqlite backend
+    ''' is injected as an IDbFileStorageProvider, otherwise the default text backend
+    ''' (jsonl / csv) is used.
+    ''' </summary>
+    Private Function OpenEngine(root As String, options As StorageOptions, backend As String) As SqlEngine
+        If backend = "sqlite" Then
+            Return New SqlEngine(New SqliteStorage(root, options), options)
+        End If
+
+        Return New SqlEngine(root, options)
+    End Function
+
     Sub Main(args As String())
         Dim root As String = PickRoot(args)
         Dim options As StorageOptions = ParseOptions(args)
-        Dim engine As New SqlEngine(root, options)
+        Dim backend As String = PickBackend(args)
+        Dim engine As SqlEngine = OpenEngine(root, options, backend)
 
         Console.OutputEncoding = New UTF8Encoding(False)
-        Console.WriteLine("JSql 0.1 - an experimental sql engine over json files")
+        Console.WriteLine("JSql 0.1 - an experimental sql engine over file storage")
         Console.WriteLine("data root: " & root)
-        Dim dataExt As String = If(options.Format = StorageFormat.Csv,
-                                    StorageLayout.CsvDataExtension,
-                                    StorageLayout.DataExtension)
 
-        Console.WriteLine("storage: " & options.Format.ToString().ToLowerInvariant() & " + wal (schema .schema.json / data " &
-                          dataExt & "), merge after " & options.MergeIdleSeconds & "s idle, fsync=" & options.FsyncEachWrite)
+        If backend = "sqlite" Then
+            Console.WriteLine("storage: sqlite (one <db>.sqlite file per database), merge after " &
+                              options.MergeIdleSeconds & "s idle")
+        Else
+            Dim dataExt As String = If(options.Format = StorageFormat.Csv,
+                                        StorageLayout.CsvDataExtension,
+                                        StorageLayout.DataExtension)
+
+            Console.WriteLine("storage: " & options.Format.ToString().ToLowerInvariant() & " + wal (schema .schema.json / data " &
+                              dataExt & "), merge after " & options.MergeIdleSeconds & "s idle, fsync=" & options.FsyncEachWrite)
+        End If
+
         Console.WriteLine("type 'help' for the meta commands, 'quit' to leave.")
         Console.WriteLine()
 
@@ -351,7 +408,8 @@ Module Program
         Console.WriteLine("startup switches:")
         Console.WriteLine("  --db <dir> | --merge-idle <seconds> | --fsync | --no-fsync")
         Console.WriteLine("  --merge-after <n> | --legacy-json | --verbose")
-        Console.WriteLine("  --format <jsonl|csv> | --storage <jsonl|csv>   row format of a new table")
+        Console.WriteLine("  --backend <text|sqlite>   physical storage backend (alias --engine)")
+        Console.WriteLine("  --format <jsonl|csv> | --storage <jsonl|csv>   new table row format (text backend)")
 
         If engine IsNot Nothing AndAlso engine.Catalog.CurrentDatabase IsNot Nothing Then
             Console.WriteLine("current database: " & engine.Catalog.CurrentDatabase)

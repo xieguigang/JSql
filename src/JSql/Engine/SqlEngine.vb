@@ -10,22 +10,75 @@ Namespace Engine
     ''' </summary>
     Public Class SqlEngine : Implements IDisposable
 
-        Public ReadOnly Property Catalog As DatabaseCatalog
+        ''' <summary>当前物理存储后端，可随时通过 <see cref="SetStorage"/> 切换。</summary>
+        Public ReadOnly Property DataStore As IDbFileStorageProvider
+            Get
+                Return _dataStore
+            End Get
+        End Property
+
+        ''' <summary><see cref="DataStore"/> 的向后兼容别名。</summary>
+        Public ReadOnly Property Catalog As IDbFileStorageProvider
+            Get
+                Return _dataStore
+            End Get
+        End Property
+
         Public ReadOnly Property Indexes As IndexManager
+            Get
+                Return _indexes
+            End Get
+        End Property
+
         Public ReadOnly Property Storage As StorageOptions
+
         Public ReadOnly Property Sessions As TableSessionPool
+            Get
+                Return _dataStore.Sessions
+            End Get
+        End Property
+
         Public ReadOnly Property CheckpointScheduler As IdleMergeScheduler
+            Get
+                Return _scheduler
+            End Get
+        End Property
 
         Private ReadOnly executor As SqlExecutor
+        Private _dataStore As IDbFileStorageProvider
+        Private _indexes As IndexManager
+        Private _scheduler As IdleMergeScheduler
 
         Sub New(root As String, Optional options As StorageOptions = Nothing)
             Storage = If(options, New StorageOptions())
-            Catalog = New DatabaseCatalog(root, Storage)
-            Sessions = Catalog.Sessions
-            Indexes = New IndexManager(Catalog)
             executor = New SqlExecutor(Me)
-            CheckpointScheduler = New IdleMergeScheduler(Sessions, Storage)
-            CheckpointScheduler.Start()
+            SetStorage(New TextFileStorage(root, Storage))
+        End Sub
+
+        ''' <summary>
+        ''' 使用指定的存储后端构造引擎。宿主可以传入 TextFileStorage（默认）或
+        ''' SqliteStorage 等实现来切换物理文件引擎。
+        ''' </summary>
+        Sub New(provider As IDbFileStorageProvider, Optional options As StorageOptions = Nothing)
+            Storage = If(options, New StorageOptions())
+            executor = New SqlExecutor(Me)
+            SetStorage(provider)
+        End Sub
+
+        ''' <summary>
+        ''' 切换物理存储后端：先释放旧后端（触发其 checkpoint / 提交），再装配新的
+        ''' 表会话池、索引管理器与空闲合并调度器。
+        ''' </summary>
+        Public Sub SetStorage(provider As IDbFileStorageProvider)
+            If provider Is Nothing Then Throw New ArgumentNullException(NameOf(provider))
+            If _dataStore Is provider Then Return
+
+            DisposeBackend()
+
+            _dataStore = provider
+            _indexes = New IndexManager(provider)
+            _scheduler = New IdleMergeScheduler(provider.Sessions, Storage)
+            _scheduler.Start()
         End Sub
 
         ''' <summary>
@@ -75,7 +128,10 @@ Namespace Engine
         ''' idle scheduler and on shutdown, also reachable through CHECKPOINT.
         ''' </summary>
         Public Function MergeAll(Optional force As Boolean = True) As Integer
-            CheckpointScheduler.Touch()
+            If _scheduler IsNot Nothing Then
+                _scheduler.Touch()
+            End If
+
             Return Sessions.MergeAll(force)
         End Function
 
@@ -107,9 +163,33 @@ Namespace Engine
         End Sub
 
         Public Sub Dispose() Implements IDisposable.Dispose
-            CheckpointScheduler.Stop()
-            CheckpointScheduler.Dispose()
-            Catalog.Dispose()
+            DisposeBackend()
+        End Sub
+
+        ''' <summary>释放当前后端：停止调度器、合并/提交未落盘的修改并关闭会话池。</summary>
+        Private Sub DisposeBackend()
+            If _scheduler IsNot Nothing Then
+                Try
+                    _scheduler.Stop()
+                    _scheduler.Dispose()
+                Catch
+                    ' the shutdown path must never throw
+                End Try
+
+                _scheduler = Nothing
+            End If
+
+            _indexes = Nothing
+
+            If _dataStore IsNot Nothing Then
+                Try
+                    _dataStore.Dispose()
+                Catch
+                    ' the shutdown path must never throw
+                End Try
+
+                _dataStore = Nothing
+            End If
         End Sub
 
         ''' <summary>

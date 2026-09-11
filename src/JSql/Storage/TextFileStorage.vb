@@ -3,11 +3,16 @@ Imports System.IO
 Namespace Storage
 
     ''' <summary>
-    ''' manages the database root folder: one sub-folder is one database. a table
-    ''' is stored as a schema file plus a jsonl data file, the legacy single file
-    ''' json layout is still readable and gets migrated on the first write.
+    ''' 文本文件存储后端：一个子目录 = 一个数据库，表以 schema 文件加行数据文件的形式存放，
+    ''' 行数据可以是 JSONL（一行一个 JSON）或 CSV（表头行 + 数据行），并带写前日志。
+    ''' 旧版单文件 json 布局仍可读取，并在第一次写入时迁移。
+    ''' <para>
+    ''' 本类即原 <c>DatabaseCatalog</c>，行为与文件布局保持不变，只是实现了
+    ''' <see cref="IDbFileStorageProvider"/> 以便与其它存储后端互换。
+    ''' </para>
     ''' </summary>
-    Public Class DatabaseCatalog
+    Public Class TextFileStorage
+        Implements IDbFileStorageProvider
 
         Public Shared ReadOnly InvalidNameChars As Char() = {"/"c, "\"c, ":"c, "*"c, "?"c, """"c, "<"c, ">"c, "|"c}
 
@@ -21,10 +26,16 @@ Namespace Storage
             Legacy
         End Enum
 
-        Public ReadOnly Property Root As String
-        Public Property CurrentDatabase As String
-        Public ReadOnly Property Options As StorageOptions
-        Public ReadOnly Property Sessions As TableSessionPool
+        Public ReadOnly Property ProviderName As String Implements IDbFileStorageProvider.ProviderName
+            Get
+                Return "text"
+            End Get
+        End Property
+
+        Public ReadOnly Property Root As String Implements IDbFileStorageProvider.Root
+        Public Property CurrentDatabase As String Implements IDbFileStorageProvider.CurrentDatabase
+        Public ReadOnly Property Options As StorageOptions Implements IDbFileStorageProvider.Options
+        Public ReadOnly Property Sessions As TableSessionPool Implements IDbFileStorageProvider.Sessions
 
         Sub New(root As String, Optional options As StorageOptions = Nothing)
             Me.Root = Path.GetFullPath(root)
@@ -46,11 +57,11 @@ Namespace Storage
             End If
         End Sub
 
-        Public Function DatabaseExists(name As String) As Boolean
+        Public Function DatabaseExists(name As String) As Boolean Implements IDbFileStorageProvider.DatabaseExists
             Return Directory.Exists(DatabaseDir(name))
         End Function
 
-        Public Function GetDatabases() As List(Of String)
+        Public Function GetDatabases() As List(Of String) Implements IDbFileStorageProvider.GetDatabases
             Dim names As New List(Of String)
 
             For Each dir As String In Directory.GetDirectories(Root)
@@ -65,12 +76,12 @@ Namespace Storage
             Return names
         End Function
 
-        Public Sub CreateDatabase(name As String)
+        Public Sub CreateDatabase(name As String) Implements IDbFileStorageProvider.CreateDatabase
             ValidateName(name, "database")
             Directory.CreateDirectory(DatabaseDir(name))
         End Sub
 
-        Public Sub DropDatabase(name As String)
+        Public Sub DropDatabase(name As String) Implements IDbFileStorageProvider.DropDatabase
             Dim dir As String = DatabaseDir(name)
             Sessions.CloseDatabase(dir)
 
@@ -79,7 +90,7 @@ Namespace Storage
             End If
         End Sub
 
-        Public Function DatabaseDir(db As String) As String
+        Public Function DatabaseDir(db As String) As String Implements IDbFileStorageProvider.DatabaseDir
             ValidateName(db, "database")
             Return Path.Combine(Root, db)
         End Function
@@ -117,7 +128,7 @@ Namespace Storage
         ''' the primary data file of a table: the jsonl data file or the legacy json
         ''' file. nothing when the table does not exist.
         ''' </summary>
-        Public Function FindTableFile(db As String, table As String) As String
+        Public Function FindTableFile(db As String, table As String) As String Implements IDbFileStorageProvider.FindTableFile
             Select Case ResolveLayout(db, table)
                 Case TableLayout.Csv
                     Return StorageLayout.CsvDataPath(DatabaseDir(db), table)
@@ -130,7 +141,7 @@ Namespace Storage
             End Select
         End Function
 
-        Public Function TableExists(db As String, table As String) As Boolean
+        Public Function TableExists(db As String, table As String) As Boolean Implements IDbFileStorageProvider.TableExists
             Return ResolveLayout(db, table) <> TableLayout.None
         End Function
 
@@ -138,12 +149,12 @@ Namespace Storage
         ''' the table names of a database: one name per table, auxiliary files of
         ''' the jsonl store are filtered out.
         ''' </summary>
-        Public Function GetTables(db As String) As List(Of String)
+        Public Function GetTables(db As String) As List(Of String) Implements IDbFileStorageProvider.GetTables
             Return StorageLayout.ListTables(DatabaseDir(db))
         End Function
 
         ''' <summary>true when the table uses the legacy single file json layout</summary>
-        Public Function IsLegacyTable(db As String, table As String) As Boolean
+        Public Function IsLegacyTable(db As String, table As String) As Boolean Implements IDbFileStorageProvider.IsLegacyTable
             Return ResolveLayout(db, table) = TableLayout.Legacy
         End Function
 
@@ -155,7 +166,7 @@ Namespace Storage
         ''' single file table is migrated) the configured <see cref="StorageOptions.Format"/>
         ''' is used.
         ''' </summary>
-        Public Function OpenSession(db As String, table As String) As ITableSession
+        Public Function OpenSession(db As String, table As String) As ITableSession Implements IDbFileStorageProvider.OpenSession
             Dim dir As String = DatabaseDir(db)
             Dim schemaPath As String = StorageLayout.SchemaPath(dir, table)
             Dim schema As TableSchema
@@ -192,14 +203,14 @@ Namespace Storage
         End Function
 
         ''' <summary>session of an already opened table, nothing when it is not open</summary>
-        Public Function TryGetSession(db As String, table As String) As ITableSession
+        Public Function TryGetSession(db As String, table As String) As ITableSession Implements IDbFileStorageProvider.TryGetSession
             Return Sessions.TryGet(DatabaseDir(db), table)
         End Function
 
         ' ==================== load / save ====================
 
         ''' <summary>load the schema and the rows of a table</summary>
-        Public Function LoadTable(db As String, table As String) As StoredTable
+        Public Function LoadTable(db As String, table As String) As StoredTable Implements IDbFileStorageProvider.LoadTable
             Select Case ResolveLayout(db, table)
                 Case TableLayout.None
                     Throw New ArgumentException("table '" & table & "' not found in database '" & db & "'!")
@@ -221,7 +232,7 @@ Namespace Storage
         ''' persist a table. the schema file is written when it changed, the rows are
         ''' synchronized line by line through the write ahead log of the jsonl store.
         ''' </summary>
-        Public Sub SaveTable(db As String, table As StoredTable)
+        Public Sub SaveTable(db As String, table As StoredTable) Implements IDbFileStorageProvider.SaveTable
             Dim dir As String = DatabaseDir(db)
             Dim name As String = table.Schema.TableName
             Dim legacyPath As String = StorageLayout.LegacyPath(dir, name)
@@ -256,7 +267,7 @@ Namespace Storage
         ''' drop a table: the session is closed first so that the exclusive lock is
         ''' released, then every data file and auxiliary file is removed.
         ''' </summary>
-        Public Sub DeleteTable(db As String, table As String)
+        Public Sub DeleteTable(db As String, table As String) Implements IDbFileStorageProvider.DeleteTable
             Dim dir As String = DatabaseDir(db)
 
             Sessions.Close(dir, table)
@@ -289,7 +300,7 @@ Namespace Storage
         ''' storage status of every table of a database, used by SHOW STORAGE.
         ''' columns: Table, Layout, Rows, Pending, WalBytes, DataBytes, File
         ''' </summary>
-        Public Function DescribeStorage(db As String) As List(Of Object())
+        Public Function DescribeStorage(db As String) As List(Of Object()) Implements IDbFileStorageProvider.DescribeStorage
             Dim rows As New List(Of Object())
 
             For Each name As String In GetTables(db)
@@ -311,7 +322,7 @@ Namespace Storage
             Return rows
         End Function
 
-        Public Sub Dispose()
+        Public Sub Dispose() Implements IDisposable.Dispose
             Sessions.DisposeAll()
         End Sub
     End Class

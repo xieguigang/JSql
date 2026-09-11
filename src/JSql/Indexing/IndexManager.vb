@@ -65,12 +65,12 @@ Namespace Indexing
     ''' </summary>
     Public Class IndexManager
 
-        Private ReadOnly catalog As DatabaseCatalog
+        Private ReadOnly catalog As IDbFileStorageProvider
         Private ReadOnly indexSets As New Dictionary(Of String, TableIndexSet)(StringComparer.OrdinalIgnoreCase)
         Private ReadOnly builtObjects As New Dictionary(Of String, JsonMemoryIndex)(StringComparer.OrdinalIgnoreCase)
         Private ReadOnly builtRowCount As New Dictionary(Of String, Integer)(StringComparer.OrdinalIgnoreCase)
 
-        Sub New(catalog As DatabaseCatalog)
+        Sub New(catalog As IDbFileStorageProvider)
             Me.catalog = catalog
         End Sub
 

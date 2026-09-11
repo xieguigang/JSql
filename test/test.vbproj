@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\GCModeller\src\runtime\sciBASIC#\Data\DataFrame\dataframework-netcore5.vbproj" />
     <ProjectReference Include="..\..\GCModeller\src\runtime\sciBASIC#\Microsoft.VisualBasic.Core\src\Core.vbproj" />
     <ProjectReference Include="..\src\JSql\JSql.vbproj" />
+    <ProjectReference Include="..\src\Sqlite\Sqlite.vbproj" />
   </ItemGroup>
 
 </Project>
