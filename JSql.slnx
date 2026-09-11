@@ -7,10 +7,18 @@
     <Project Path="../GCModeller/src/runtime/Darwinism/src/data/LINQ/LINQ/LINQ.vbproj">
       <Platform Solution="*|x64" Project="x64" />
     </Project>
-    <Project Path="../GCModeller/src/runtime/sciBASIC#/Data/DataFrame/dataframework-netcore5.vbproj">
+    <Project Path="../GCModeller/src/runtime/sciBASIC#/Microsoft.VisualBasic.Core/src/Core.vbproj">
       <Platform Solution="*|x64" Project="x64" />
     </Project>
-    <Project Path="../GCModeller/src/runtime/sciBASIC#/Microsoft.VisualBasic.Core/src/Core.vbproj">
+  </Folder>
+  <Folder Name="/framework/storage/">
+    <Project Path="../GCModeller/src/runtime/sciBASIC#/Data/BinaryData/BinaryData/binarydata-netcore5.vbproj">
+      <Platform Solution="*|x64" Project="x64" />
+    </Project>
+    <Project Path="../GCModeller/src/runtime/sciBASIC#/Data/BinaryData/SQLite3/SQLite3.vbproj">
+      <Platform Solution="*|x64" Project="x64" />
+    </Project>
+    <Project Path="../GCModeller/src/runtime/sciBASIC#/Data/DataFrame/dataframework-netcore5.vbproj">
       <Platform Solution="*|x64" Project="x64" />
     </Project>
   </Folder>
@@ -18,6 +26,9 @@
     <Platform Solution="*|x64" Project="x64" />
   </Project>
   <Project Path="src/Repl/Repl.vbproj" Id="cf2c4e07-cee4-4b79-9840-4996ade07785">
+    <Platform Solution="Debug|x64" Project="x64" />
+  </Project>
+  <Project Path="src/Sqlite/Sqlite.vbproj" Id="15b439be-9ef8-4ec9-9235-ed2a337d4bdb">
     <Platform Solution="Debug|x64" Project="x64" />
   </Project>
   <Project Path="test/test.vbproj" Id="c8901392-09ea-4ccb-b7ad-3dfd5df9285e">
