@@ -24,10 +24,18 @@ Module Program
         Select Case mode
             Case "demo"
                 exitCode = StorageFormatDemoTests.Run()
+            Case "sqlite"
+                exitCode = StorageSqliteTests.Run()
             Case "stress"
                 exitCode = StorageStressTests.Run(args)
             Case "all"
                 exitCode = StorageFormatDemoTests.Run()
+
+                Dim sqlite As Integer = StorageSqliteTests.Run()
+
+                If sqlite <> 0 Then
+                    exitCode = sqlite
+                End If
 
                 Dim stress As Integer = StorageStressTests.Run(args)
 
@@ -45,10 +53,11 @@ Module Program
     End Sub
 
     Private Sub PrintUsage()
-        Console.WriteLine("usage: test [demo|stress|all] [stress options]")
+        Console.WriteLine("usage: test [demo|sqlite|stress|all] [stress options]")
         Console.WriteLine("  demo                  run the jsonl/csv functional demo (default)")
+        Console.WriteLine("  sqlite                run the sqlite backend end-to-end tests")
         Console.WriteLine("  stress                run the storage read/write stress test")
-        Console.WriteLine("  all                   run both")
+        Console.WriteLine("  all                   run demo, sqlite and stress")
         Console.WriteLine("stress options:")
         Console.WriteLine("  --size <GB>           target data size (default 2)")
         Console.WriteLine("  --rows <N>            explicit row count (overrides --size)")
