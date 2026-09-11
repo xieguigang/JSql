@@ -15,6 +15,8 @@ Namespace Storage
             None
             ''' <summary>&lt;table&gt;.schema.json + &lt;table&gt;.jsonl with write ahead log</summary>
             Jsonl
+            ''' <summary>&lt;table&gt;.schema.json + &lt;table&gt;.csv (header line + data rows) with write ahead log</summary>
+            Csv
             ''' <summary>the legacy &lt;table&gt;.json single file table</summary>
             Legacy
         End Enum
@@ -91,9 +93,17 @@ Namespace Storage
                 Return TableLayout.None
             End If
 
-            If File.Exists(StorageLayout.DataPath(dir, table)) OrElse
-               File.Exists(StorageLayout.SchemaPath(dir, table)) Then
+            If File.Exists(StorageLayout.CsvDataPath(dir, table)) Then
+                Return TableLayout.Csv
+            End If
+
+            If File.Exists(StorageLayout.DataPath(dir, table)) Then
                 Return TableLayout.Jsonl
+            End If
+
+            If File.Exists(StorageLayout.SchemaPath(dir, table)) Then
+                ' 只有 schema、尚无数据文件：按配置的默认格式判定
+                Return If(Options.Format = StorageFormat.Csv, TableLayout.Csv, TableLayout.Jsonl)
             End If
 
             If File.Exists(StorageLayout.LegacyPath(dir, table)) Then
@@ -109,6 +119,8 @@ Namespace Storage
         ''' </summary>
         Public Function FindTableFile(db As String, table As String) As String
             Select Case ResolveLayout(db, table)
+                Case TableLayout.Csv
+                    Return StorageLayout.CsvDataPath(DatabaseDir(db), table)
                 Case TableLayout.Jsonl
                     Return StorageLayout.DataPath(DatabaseDir(db), table)
                 Case TableLayout.Legacy
@@ -137,11 +149,15 @@ Namespace Storage
 
         ' ==================== session access ====================
 
-        ''' <summary>open (or reuse) the jsonl session of one table</summary>
-        Public Function OpenSession(db As String, table As String) As JsonlTableSession
+        ''' <summary>
+        ''' open (or reuse) the session of one table. the row format is decided by the
+        ''' extension of the existing data file; for a brand new table (or when a legacy
+        ''' single file table is migrated) the configured <see cref="StorageOptions.Format"/>
+        ''' is used.
+        ''' </summary>
+        Public Function OpenSession(db As String, table As String) As ITableSession
             Dim dir As String = DatabaseDir(db)
             Dim schemaPath As String = StorageLayout.SchemaPath(dir, table)
-            Dim dataPath As String = StorageLayout.DataPath(dir, table)
             Dim schema As TableSchema
 
             If File.Exists(schemaPath) Then
@@ -150,11 +166,33 @@ Namespace Storage
                 schema = New TableSchema With {.TableName = table}
             End If
 
-            Return Sessions.GetOrOpen(dir, table, schema, schemaPath, dataPath)
+            Dim useCsv As Boolean
+
+            Select Case ResolveLayout(db, table)
+                Case TableLayout.Csv
+                    useCsv = True
+                Case TableLayout.Jsonl
+                    useCsv = False
+                Case Else
+                    useCsv = Options.Format = StorageFormat.Csv
+            End Select
+
+            Dim format As StorageFormat = If(useCsv, StorageFormat.Csv, StorageFormat.Jsonl)
+            Dim dataPath As String = StorageLayout.DataPathForFormat(dir, table, format)
+
+            Return Sessions.GetOrOpen(dir, table, Function() NewSession(useCsv, schema, schemaPath, dataPath))
+        End Function
+
+        Private Function NewSession(useCsv As Boolean, schema As TableSchema, schemaPath As String, dataPath As String) As ITableSession
+            If useCsv Then
+                Return New CsvTableSession(schema, schemaPath, dataPath, Options)
+            End If
+
+            Return New JsonlTableSession(schema, schemaPath, dataPath, Options)
         End Function
 
         ''' <summary>session of an already opened table, nothing when it is not open</summary>
-        Public Function TryGetSession(db As String, table As String) As JsonlTableSession
+        Public Function TryGetSession(db As String, table As String) As ITableSession
             Return Sessions.TryGet(DatabaseDir(db), table)
         End Function
 
@@ -170,7 +208,7 @@ Namespace Storage
                     Return SchemaStore.ReadLegacy(StorageLayout.LegacyPath(DatabaseDir(db), table))
 
                 Case Else
-                    Dim session As JsonlTableSession = OpenSession(db, table)
+                    Dim session As ITableSession = OpenSession(db, table)
 
                     Return New StoredTable With {
                         .Schema = session.Schema,

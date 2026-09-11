@@ -2,6 +2,14 @@ Imports Microsoft.VisualBasic.Data.Repository
 
 Namespace Storage
 
+    ''' <summary>新建表所使用的物理存储格式。</summary>
+    Public Enum StorageFormat
+        ''' <summary>一行一个 JSON 对象的 JSONL 数据文件（默认）。</summary>
+        Jsonl = 0
+        ''' <summary>表头行 + 数据行的 CSV 数据文件。</summary>
+        Csv = 1
+    End Enum
+
     ''' <summary>
     ''' runtime switches of the table storage layer. the jsonl layout is the
     ''' default, the legacy whole table json file is kept for compatibility.
@@ -29,12 +37,18 @@ Namespace Storage
         ''' <summary>create new tables as legacy single file json instead of the jsonl layout</summary>
         Public Property LegacyJson As Boolean = False
 
-        ''' <summary>sparse line index granularity of the jsonl data file</summary>
+        ''' <summary>
+        ''' 新建表默认使用的物理存储格式。已有的表按其数据文件扩展名自动识别，
+        ''' 本选项只影响“尚不存在数据文件的新表”。
+        ''' </summary>
+        Public Property Format As StorageFormat = StorageFormat.Jsonl
+
+        ''' <summary>sparse line index granularity of the data file</summary>
         Public Property IndexGranularity As Integer = 1024
 
-        ''' <summary>build the options object handed over to the jsonl store engine</summary>
-        Public Function CreateJsonlOptions() As JsonlStoreOptions
-            Return New JsonlStoreOptions With {
+        ''' <summary>build the options object handed over to the format-agnostic text line store engine</summary>
+        Public Function CreateStoreOptions() As TextStoreOptions
+            Return New TextStoreOptions With {
                 .IndexGranularity = IndexGranularity,
                 .FsyncEachWrite = FsyncEachWrite,
                 .RepairTornTail = True

@@ -1,14 +1,15 @@
 Namespace Storage
 
     ''' <summary>
-    ''' caches the open table sessions. a jsonl data file is exclusively locked by
-    ''' the store engine, so one table may only be opened once per process; every
-    ''' write statement reuses the session of the previous statement.
+    ''' caches the open table sessions. a row data file is exclusively locked by the
+    ''' store engine, so one table may only be opened once per process; every write
+    ''' statement reuses the session of the previous statement. sessions are created
+    ''' lazily through a factory delegate, so the pool stays format agnostic.
     ''' </summary>
     Public Class TableSessionPool : Implements IDisposable
 
         Private ReadOnly _options As StorageOptions
-        Private ReadOnly _sessions As New Dictionary(Of String, JsonlTableSession)(StringComparer.OrdinalIgnoreCase)
+        Private ReadOnly _sessions As New Dictionary(Of String, ITableSession)(StringComparer.OrdinalIgnoreCase)
         Private ReadOnly _gate As New Object
 
         ''' <summary>raised when a session reports a diagnostic message</summary>
@@ -28,46 +29,47 @@ Namespace Storage
             Return dbDir.ToLowerInvariant() & "/" & table
         End Function
 
-        ''' <summary>get the session of a table, open it on the first access</summary>
-        Public Function GetOrOpen(dbDir As String, table As String, schema As TableSchema,
-                                 schemaPath As String, dataPath As String) As JsonlTableSession
+        ''' <summary>get the session of a table, open it through the factory on the first access</summary>
+        Public Function GetOrOpen(dbDir As String, table As String, creator As Func(Of ITableSession)) As ITableSession
+            If creator Is Nothing Then Throw New ArgumentNullException(NameOf(creator))
+
             Dim key As String = CacheKey(dbDir, table)
 
             SyncLock _gate
-                Dim session As JsonlTableSession = Nothing
+                Dim session As ITableSession = Nothing
 
                 If _sessions.TryGetValue(key, session) Then
                     Return session
                 End If
 
-                session = New JsonlTableSession(schema, schemaPath, dataPath, _options)
+                session = creator()
                 AddHandler session.Info, AddressOf OnSessionInfo
                 _sessions(key) = session
                 Return session
             End SyncLock
         End Function
 
-        Public Function TryGet(dbDir As String, table As String) As JsonlTableSession
+        Public Function TryGet(dbDir As String, table As String) As ITableSession
             SyncLock _gate
-                Dim session As JsonlTableSession = Nothing
+                Dim session As ITableSession = Nothing
                 _sessions.TryGetValue(CacheKey(dbDir, table), session)
                 Return session
             End SyncLock
         End Function
 
-        Public Function OpenSessions() As List(Of JsonlTableSession)
+        Public Function OpenSessions() As List(Of ITableSession)
             SyncLock _gate
                 Return _sessions.Values.ToList()
             End SyncLock
         End Function
 
         ''' <summary>snapshot of the open sessions together with their cache keys</summary>
-        Public Function OpenSessionKeys() As List(Of KeyValuePair(Of String, JsonlTableSession))
-            Dim list As New List(Of KeyValuePair(Of String, JsonlTableSession))
+        Public Function OpenSessionKeys() As List(Of KeyValuePair(Of String, ITableSession))
+            Dim list As New List(Of KeyValuePair(Of String, ITableSession))
 
             SyncLock _gate
                 For Each kv In _sessions
-                    list.Add(New KeyValuePair(Of String, JsonlTableSession)(kv.Key, kv.Value))
+                    list.Add(New KeyValuePair(Of String, ITableSession)(kv.Key, kv.Value))
                 Next
             End SyncLock
 
@@ -84,7 +86,7 @@ Namespace Storage
         ''' </summary>
         Public Sub Close(dbDir As String, table As String)
             Dim key As String = CacheKey(dbDir, table)
-            Dim session As JsonlTableSession = Nothing
+            Dim session As ITableSession = Nothing
 
             SyncLock _gate
                 If _sessions.TryGetValue(key, session) Then
@@ -110,8 +112,8 @@ Namespace Storage
                 Next
             End SyncLock
 
-            For Each key In keys
-                Dim session As JsonlTableSession = Nothing
+            For Each key As String In keys
+                Dim session As ITableSession = Nothing
 
                 SyncLock _gate
                     If _sessions.TryGetValue(key, session) Then
@@ -133,7 +135,7 @@ Namespace Storage
         Public Function MergeAll(Optional force As Boolean = False) As Integer
             Dim merged As Integer = 0
 
-            For Each session As JsonlTableSession In OpenSessions()
+            For Each session As ITableSession In OpenSessions()
                 Try
                     If force OrElse session.HasPendingChanges Then
                         session.Merge()
@@ -151,7 +153,7 @@ Namespace Storage
         Public Function MergeOverloaded(threshold As Integer) As Integer
             Dim merged As Integer = 0
 
-            For Each session As JsonlTableSession In OpenSessions()
+            For Each session As ITableSession In OpenSessions()
                 Try
                     If session.PendingOperations >= threshold AndAlso session.HasPendingChanges Then
                         session.Merge()
@@ -166,13 +168,13 @@ Namespace Storage
         End Function
 
         Public Sub DisposeAll()
-            Dim sessions As List(Of JsonlTableSession) = OpenSessions()
+            Dim sessions As List(Of ITableSession) = OpenSessions()
 
             SyncLock _gate
                 _sessions.Clear()
             End SyncLock
 
-            For Each session In sessions
+            For Each session As ITableSession In sessions
                 RemoveHandler session.Info, AddressOf OnSessionInfo
 
                 Try
