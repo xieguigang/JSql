@@ -1,0 +1,15 @@
+{
+  "table": "t",
+  "comment": "legacy table",
+  "keys": [
+    { "name": "PRIMARY", "columns": ["id"], "unique": true, "primary": true }
+  ],
+  "columns": [
+    { "name": "id", "type": "INT", "notNull": true, "primaryKey": true, "defaultValue": null, "comment": "pk" },
+    { "name": "name", "type": "VARCHAR(20)", "notNull": false, "primaryKey": false, "defaultValue": null, "comment": null }
+  ],
+  "rows": [
+    { "id": 1, "name": "legacy-one" },
+    { "id": 2, "name": "legacy-two" }
+  ]
+}

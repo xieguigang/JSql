@@ -105,6 +105,16 @@ Namespace Sql
                 Return New UseStatement With {.Database = ExpectIdentifier()}
             ElseIf t.IsKeyword("SHOW") Then
                 Return ParseShow()
+            ElseIf t.IsKeyword("CHECKPOINT") Then
+                p += 1
+
+                Dim stmt As New CheckpointStatement
+
+                If AcceptKeyword("TABLE") Then
+                    stmt.Table = ExpectIdentifier()
+                End If
+
+                Return stmt
             ElseIf t.IsKeyword("DESCRIBE") OrElse t.IsKeyword("DESC") OrElse t.IsKeyword("EXPLAIN") Then
                 p += 1
                 Return New ShowStatement With {.Kind = ShowKind.Columns, .Target = ExpectIdentifier()}
@@ -1094,6 +1104,18 @@ Namespace Sql
                 AcceptKeyword("FROM")
                 AcceptKeyword("IN")
                 stmt.Target = ExpectIdentifier()
+                Return stmt
+            End If
+
+            If AcceptKeyword("STORAGE") OrElse AcceptKeyword("CHECKPOINTS") Then
+                stmt.Kind = ShowKind.Storage
+                AcceptKeyword("FROM")
+                AcceptKeyword("IN")
+
+                If tokens(p).Kind = TokenKind.Identifier OrElse tokens(p).Kind = TokenKind.QuotedIdentifier Then
+                    stmt.Target = ExpectIdentifier()
+                End If
+
                 Return stmt
             End If
 

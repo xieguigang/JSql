@@ -2,6 +2,7 @@ Imports System.IO
 Imports System.Text
 Imports JSql.Engine
 Imports JSql.Sql
+Imports JSql.Storage
 
 Module Program
 
@@ -27,15 +28,69 @@ Module Program
         Return Path.Combine(Directory.GetCurrentDirectory(), "jsql-data")
     End Function
 
+    ''' <summary>
+    ''' parse the storage switches:
+    '''   --merge-idle &lt;seconds&gt;  idle seconds before the WAL is merged (0 = off)
+    '''   --fsync                 fsync the WAL on every write (slow but power safe)
+    '''   --no-fsync              one flush per statement (default, fast)
+    '''   --merge-after &lt;n&gt;      merge a table once it has n pending operations
+    '''   --legacy-json           create new tables as single file json
+    '''   --verbose               print the store diagnostics to stderr
+    ''' </summary>
+    Private Function ParseOptions(args As String()) As StorageOptions
+        Dim options As New StorageOptions
+
+        For i As Integer = 0 To args.Length - 1
+            Dim a As String = args(i)
+
+            Select Case a
+                Case "--fsync"
+                    options.FsyncEachWrite = True
+                Case "--no-fsync"
+                    options.FsyncEachWrite = False
+                Case "--legacy-json"
+                    options.LegacyJson = True
+                Case "--verbose"
+                    options.Verbose = True
+                Case "--merge-idle"
+                    If i + 1 < args.Length Then
+                        Dim seconds As Integer = 0
+
+                        If Integer.TryParse(args(i + 1), seconds) Then
+                            options.MergeIdleSeconds = Math.Max(0, seconds)
+                        End If
+                    End If
+                Case "--merge-after"
+                    If i + 1 < args.Length Then
+                        Dim count As Integer = 0
+
+                        If Integer.TryParse(args(i + 1), count) Then
+                            options.MergeAfterOperations = Math.Max(0, count)
+                        End If
+                    End If
+            End Select
+        Next
+
+        Return options
+    End Function
+
     Sub Main(args As String())
         Dim root As String = PickRoot(args)
-        Dim engine As New SqlEngine(root)
+        Dim options As StorageOptions = ParseOptions(args)
+        Dim engine As New SqlEngine(root, options)
 
         Console.OutputEncoding = New UTF8Encoding(False)
         Console.WriteLine("JSql 0.1 - an experimental sql engine over json files")
         Console.WriteLine("data root: " & root)
+        Console.WriteLine("storage: jsonl + wal (schema .schema.json / data .jsonl), merge after " &
+                          options.MergeIdleSeconds & "s idle, fsync=" & options.FsyncEachWrite)
         Console.WriteLine("type 'help' for the meta commands, 'quit' to leave.")
         Console.WriteLine()
+
+        If options.Verbose Then
+            AddHandler engine.Sessions.Info, AddressOf PrintStoreInfo
+            AddHandler engine.CheckpointScheduler.Info, AddressOf PrintStoreInfo
+        End If
 
         If Not Directory.Exists(root) Then
             Directory.CreateDirectory(root)
@@ -95,6 +150,34 @@ Module Program
             buffer.Clear()
             prompt = "jsql> "
         Loop
+
+        Shutdown(engine)
+    End Sub
+
+    Private Sub PrintStoreInfo(message As String)
+        Console.Error.WriteLine("[store] " & message)
+    End Sub
+
+    ''' <summary>
+    ''' merge the pending WAL records and release every table lock before leaving.
+    ''' </summary>
+    Private Sub Shutdown(engine As SqlEngine)
+        Try
+            Console.Write("checkpointing ... ")
+
+            Dim merged As Integer = engine.MergeAll(force:=False)
+            engine.FlushAll()
+
+            Console.WriteLine(merged & " table(s) merged")
+        Catch ex As Exception
+            Console.Error.WriteLine("checkpoint on shutdown failed: " & ex.Message)
+        End Try
+
+        Try
+            engine.Dispose()
+        Catch
+            ' the exit path must never throw
+        End Try
     End Sub
 
     Private Function IsComplete(sqlText As String) As Boolean
@@ -229,7 +312,12 @@ Module Program
         Console.WriteLine("  USE db | SHOW DATABASES | SHOW TABLES [FROM db]")
         Console.WriteLine("  SHOW INDEXES FROM t | DESCRIBE t")
         Console.WriteLine("  CREATE INDEX idx ON t (col) [USING HASH|BTREE|FULLTEXT]")
+        Console.WriteLine("  CHECKPOINT [TABLE t]   -- merge the write ahead log into the data file")
+        Console.WriteLine("  SHOW STORAGE [FROM t]  -- rows / pending wal operations / file sizes")
         Console.WriteLine("  help | clear | quit")
+        Console.WriteLine("startup switches:")
+        Console.WriteLine("  --db <dir> | --merge-idle <seconds> | --fsync | --no-fsync")
+        Console.WriteLine("  --merge-after <n> | --legacy-json | --verbose")
 
         If engine IsNot Nothing AndAlso engine.Catalog.CurrentDatabase IsNot Nothing Then
             Console.WriteLine("current database: " & engine.Catalog.CurrentDatabase)

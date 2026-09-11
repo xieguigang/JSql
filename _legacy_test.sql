@@ -1,0 +1,7 @@
+CREATE DATABASE legacy;
+USE legacy;
+SELECT * FROM t;
+DESCRIBE t;
+INSERT INTO t VALUES (3, 'migrated');
+SELECT * FROM t;
+SHOW STORAGE;

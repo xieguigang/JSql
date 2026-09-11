@@ -1,3 +1,4 @@
+Imports System.IO
 Imports JSql.Sql
 Imports JSql.Storage
 
@@ -863,6 +864,32 @@ Namespace Engine
 
                     Return ResultSet.FromQuery(New String() {"Index", "Column", "Kind", "Type"}, rows)
 
+                Case ShowKind.Storage
+                    Dim db As String = CurrentDb()
+                    Dim rows As New List(Of Object())
+
+                    If stmt.Target Is Nothing Then
+                        rows.AddRange(engine.Catalog.DescribeStorage(db))
+                    Else
+                        Dim session As JsonlTableSession = engine.Catalog.TryGetSession(db, stmt.Target)
+
+                        If session IsNot Nothing Then
+                            rows.Add(New Object() {session.TableName, session.Layout, session.LineCount,
+                                                   session.PendingOperations, session.WalFileSize,
+                                                   session.DataFileSize, Path.GetFileName(session.DataFilePath)})
+                        ElseIf engine.Catalog.IsLegacyTable(db, stmt.Target) Then
+                            Dim filePath As String = engine.Catalog.FindTableFile(db, stmt.Target)
+                            Dim size As Long = If(filePath IsNot Nothing AndAlso System.IO.File.Exists(filePath), New FileInfo(filePath).Length, 0L)
+
+                            rows.Add(New Object() {stmt.Target, "JSON", -1L, 0L, 0L, size, Path.GetFileName(If(filePath, ""))})
+                        Else
+                            Throw New SqlError("table " & stmt.Target & " does not exist")
+                        End If
+                    End If
+
+                    Return ResultSet.FromQuery(
+                        New String() {"Table", "Layout", "Rows", "Pending", "WalBytes", "DataBytes", "File"}, rows)
+
                 Case Else
                     Dim dbx As String = CurrentDb()
                     Dim stored As StoredTable = engine.Catalog.LoadTable(dbx, stmt.Target)
@@ -876,6 +903,30 @@ Namespace Engine
 
                     Return ResultSet.FromQuery(New String() {"Field", "Type", "Null", "Key", "Default", "Comment"}, rowsx)
             End Select
+        End Function
+
+        ''' <summary>
+        ''' CHECKPOINT [TABLE t]: merge the pending write ahead log of the table(s)
+        ''' back into the jsonl data file.
+        ''' </summary>
+        Public Function ExecuteCheckpoint(stmt As CheckpointStatement) As ResultSet
+            If stmt.Table Is Nothing Then
+                Dim merged As Integer = engine.MergeAll(force:=False)
+
+                Return ResultSet.FromMessage("Query OK, " & merged & " table(s) checkpointed.")
+            End If
+
+            Dim db As String = CurrentDb()
+
+            If Not engine.Catalog.TableExists(db, stmt.Table) Then
+                Throw New SqlError("table " & stmt.Table & " does not exist")
+            End If
+
+            If Not engine.MergeTable(db, stmt.Table) Then
+                Return ResultSet.FromMessage("Query OK, table " & stmt.Table & " uses the legacy json layout, nothing to checkpoint.")
+            End If
+
+            Return ResultSet.FromMessage("Query OK, table " & stmt.Table & " checkpointed.")
         End Function
     End Class
 End Namespace

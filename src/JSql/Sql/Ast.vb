@@ -139,13 +139,24 @@ Namespace Sql
         Tables
         Indexes
         Columns
+        ''' <summary>the physical storage status of the tables</summary>
+        Storage
     End Enum
 
     Public Class ShowStatement : Inherits SqlStatement
 
         Public Property Kind As ShowKind
-        ''' <summary>Tables: database name (nothing = current); Indexes/Columns: table name</summary>
+        ''' <summary>Tables: database name (nothing = current); Indexes/Columns/Storage: table name</summary>
         Public Property Target As String
+    End Class
+
+    ''' <summary>
+    ''' CHECKPOINT [TABLE t]: merge the pending write ahead log back into the data file
+    ''' </summary>
+    Public Class CheckpointStatement : Inherits SqlStatement
+
+        ''' <summary>nothing = merge every open table</summary>
+        Public Property Table As String
     End Class
 
     ' ==================== expressions ====================

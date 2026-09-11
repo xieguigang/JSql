@@ -1,0 +1,18 @@
+CREATE DATABASE wal;
+USE wal;
+CREATE TABLE orders (oid INT PRIMARY KEY, customer VARCHAR(40) COMMENT 'the buyer', amount DOUBLE, created DATETIME);
+INSERT INTO orders (oid, customer, amount, created) VALUES (1, 'alice', 120.5, '2025-01-02 10:00:00');
+INSERT INTO orders (oid, customer, amount, created) VALUES (2, 'bob', 80.0, '2025-01-05 11:00:00');
+INSERT INTO orders (oid, customer, amount, created) VALUES (3, 'carol', 300.0, '2025-02-01 09:30:00');
+SHOW STORAGE;
+SELECT * FROM orders;
+UPDATE orders SET amount = 95.5 WHERE oid = 2;
+DELETE FROM orders WHERE oid = 1;
+INSERT INTO orders (oid, customer, amount, created) VALUES (4, 'dave', 15.0, '2025-03-01 08:00:00');
+SHOW STORAGE FROM orders;
+CHECKPOINT TABLE orders;
+SHOW STORAGE FROM orders;
+SELECT oid, customer, amount FROM orders ORDER BY oid;
+CREATE INDEX idx_amount ON orders (amount) USING BTREE;
+SELECT oid, amount FROM orders WHERE amount > 50;
+SHOW TABLES;
