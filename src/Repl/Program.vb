@@ -30,6 +30,7 @@ Module Program
 
     ''' <summary>
     ''' parse the storage switches:
+    '''   --format &lt;jsonl|csv&gt;   row format used when creating a new table (--storage is an alias)
     '''   --merge-idle &lt;seconds&gt;  idle seconds before the WAL is merged (0 = off)
     '''   --fsync                 fsync the WAL on every write (slow but power safe)
     '''   --no-fsync              one flush per statement (default, fast)
@@ -43,6 +44,16 @@ Module Program
         For i As Integer = 0 To args.Length - 1
             Dim a As String = args(i)
 
+            If a.StartsWith("--format=", StringComparison.OrdinalIgnoreCase) Then
+                Call ApplyFormat(options, a.Substring("--format=".Length))
+                Continue For
+            End If
+
+            If a.StartsWith("--storage=", StringComparison.OrdinalIgnoreCase) Then
+                Call ApplyFormat(options, a.Substring("--storage=".Length))
+                Continue For
+            End If
+
             Select Case a
                 Case "--fsync"
                     options.FsyncEachWrite = True
@@ -52,6 +63,10 @@ Module Program
                     options.LegacyJson = True
                 Case "--verbose"
                     options.Verbose = True
+                Case "--format", "--storage"
+                    If i + 1 < args.Length Then
+                        Call ApplyFormat(options, args(i + 1))
+                    End If
                 Case "--merge-idle"
                     If i + 1 < args.Length Then
                         Dim seconds As Integer = 0
@@ -74,6 +89,20 @@ Module Program
         Return options
     End Function
 
+    ''' <summary>apply a "jsonl" / "csv" format switch (aliases: json, jsonl).</summary>
+    Private Function ApplyFormat(options As StorageOptions, text As String) As Boolean
+        Select Case If(text, "").Trim().ToLowerInvariant()
+            Case "csv"
+                options.Format = StorageFormat.Csv
+                Return True
+            Case "jsonl", "json"
+                options.Format = StorageFormat.Jsonl
+                Return True
+            Case Else
+                Return False
+        End Select
+    End Function
+
     Sub Main(args As String())
         Dim root As String = PickRoot(args)
         Dim options As StorageOptions = ParseOptions(args)
@@ -82,8 +111,12 @@ Module Program
         Console.OutputEncoding = New UTF8Encoding(False)
         Console.WriteLine("JSql 0.1 - an experimental sql engine over json files")
         Console.WriteLine("data root: " & root)
-        Console.WriteLine("storage: jsonl + wal (schema .schema.json / data .jsonl), merge after " &
-                          options.MergeIdleSeconds & "s idle, fsync=" & options.FsyncEachWrite)
+        Dim dataExt As String = If(options.Format = StorageFormat.Csv,
+                                    StorageLayout.CsvDataExtension,
+                                    StorageLayout.DataExtension)
+
+        Console.WriteLine("storage: " & options.Format.ToString().ToLowerInvariant() & " + wal (schema .schema.json / data " &
+                          dataExt & "), merge after " & options.MergeIdleSeconds & "s idle, fsync=" & options.FsyncEachWrite)
         Console.WriteLine("type 'help' for the meta commands, 'quit' to leave.")
         Console.WriteLine()
 
@@ -318,6 +351,7 @@ Module Program
         Console.WriteLine("startup switches:")
         Console.WriteLine("  --db <dir> | --merge-idle <seconds> | --fsync | --no-fsync")
         Console.WriteLine("  --merge-after <n> | --legacy-json | --verbose")
+        Console.WriteLine("  --format <jsonl|csv> | --storage <jsonl|csv>   row format of a new table")
 
         If engine IsNot Nothing AndAlso engine.Catalog.CurrentDatabase IsNot Nothing Then
             Console.WriteLine("current database: " & engine.Catalog.CurrentDatabase)

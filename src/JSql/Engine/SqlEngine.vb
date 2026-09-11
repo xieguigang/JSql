@@ -81,7 +81,7 @@ Namespace Engine
 
         ''' <summary>merge one table, the session is opened first when needed</summary>
         Public Function MergeTable(db As String, table As String) As Boolean
-            Dim session As JsonlTableSession = Catalog.TryGetSession(db, table)
+            Dim session As ITableSession = Catalog.TryGetSession(db, table)
 
             If session Is Nothing Then
                 If Catalog.IsLegacyTable(db, table) Then
@@ -97,7 +97,7 @@ Namespace Engine
 
         ''' <summary>flush the write ahead log of every open session</summary>
         Public Sub FlushAll()
-            For Each session As JsonlTableSession In Sessions.OpenSessions()
+            For Each session As ITableSession In Sessions.OpenSessions()
                 Try
                     session.Flush()
                 Catch

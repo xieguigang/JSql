@@ -224,23 +224,22 @@ Namespace Storage
         Public Sub SaveTable(db As String, table As StoredTable)
             Dim dir As String = DatabaseDir(db)
             Dim name As String = table.Schema.TableName
-            Dim schemaPath As String = StorageLayout.SchemaPath(dir, name)
-            Dim dataPath As String = StorageLayout.DataPath(dir, name)
             Dim legacyPath As String = StorageLayout.LegacyPath(dir, name)
-            Dim hasJsonl As Boolean = File.Exists(dataPath) OrElse File.Exists(schemaPath)
+            Dim layout As TableLayout = ResolveLayout(db, name)
+            Dim hasEngine As Boolean = layout = TableLayout.Jsonl OrElse layout = TableLayout.Csv
 
-            If Options.LegacyJson AndAlso Not hasJsonl Then
+            If Options.LegacyJson AndAlso Not hasEngine Then
                 ' explicit legacy mode: keep the old whole file json layout
                 Call New JsonTableStore().Write(legacyPath, table)
                 Return
             End If
 
-            Dim session As JsonlTableSession = Sessions.GetOrOpen(dir, name, table.Schema, schemaPath, dataPath)
+            Dim session As ITableSession = OpenSession(db, name)
 
             session.SaveSchema(table.Schema)
             session.SyncRows(table.Rows)
 
-            If Not hasJsonl AndAlso File.Exists(legacyPath) Then
+            If Not hasEngine AndAlso File.Exists(legacyPath) Then
                 ' the legacy file has been imported into the jsonl layout, keep it as
                 ' a backup instead of silently deleting the original data
                 Dim backup As String = StorageLayout.LegacyBackupPath(dir, name)
@@ -264,6 +263,7 @@ Namespace Storage
 
             DeleteFileIfExists(StorageLayout.SchemaPath(dir, table))
             DeleteFileIfExists(StorageLayout.DataPath(dir, table))
+            DeleteFileIfExists(StorageLayout.CsvDataPath(dir, table))
             DeleteFileIfExists(StorageLayout.LegacyPath(dir, table))
             DeleteFileIfExists(StorageLayout.LegacyBackupPath(dir, table))
 
@@ -293,18 +293,17 @@ Namespace Storage
             Dim rows As New List(Of Object())
 
             For Each name As String In GetTables(db)
-                Dim layout As String = If(ResolveLayout(db, name) = TableLayout.Legacy, "JSON", "JSONL")
                 Dim dir As String = DatabaseDir(db)
 
-                If layout = "JSON" Then
+                If ResolveLayout(db, name) = TableLayout.Legacy Then
                     Dim filePath As String = StorageLayout.LegacyPath(dir, name)
                     Dim size As Long = If(System.IO.File.Exists(filePath), New FileInfo(filePath).Length, 0L)
 
-                    rows.Add(New Object() {name, layout, -1L, 0L, 0L, size, Path.GetFileName(filePath)})
+                    rows.Add(New Object() {name, "JSON", -1L, 0L, 0L, size, Path.GetFileName(filePath)})
                 Else
-                    Dim session As JsonlTableSession = OpenSession(db, name)
+                    Dim session As ITableSession = OpenSession(db, name)
 
-                    rows.Add(New Object() {name, layout, session.LineCount, session.PendingOperations,
+                    rows.Add(New Object() {name, session.Layout, session.LineCount, session.PendingOperations,
                                            session.WalFileSize, session.DataFileSize, Path.GetFileName(session.DataFilePath)})
                 End If
             Next

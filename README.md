@@ -1,11 +1,12 @@
 # JSql
 
-一个**实验性质的 SQL 引擎**：用 VB.NET 编写，以 **JSON 文件**作为数据库存储，通过**命令行 REPL** 交互式执行 SQL 语句。
+一个**实验性质的 SQL 引擎**：用 VB.NET 编写，以 **文本文件**作为数据库存储，通过**命令行 REPL** 交互式执行 SQL 语句。
 
-- 一个**文件夹 = 一个数据库**，文件夹里的**一个 JSON 文件 = 一张数据表**
+- 一个**文件夹 = 一个数据库**，文件夹里的**一个数据文件 = 一张数据表**
+- 支持两种行存储格式：**JSONL**（一行一个 JSON 对象，默认）与 **CSV**（表头行 + 数据行），可用启动开关 `--format <jsonl|csv>` 切换新建表使用的格式
 - 内置完整的 SQL 前端（手写词法/语法分析器 + 执行引擎），兼容 MySQL 常用查询语法
 - 数据表支持**索引**：复用 [GCModeller LINQ](https://github.com/xieguigang/GCModeller) 项目中的内存索引算法（哈希索引、范围索引、全文索引），索引可**落盘为 `.idx` 文件**并在重启后恢复
-- 存储层通过接口抽象，**当前实现 JSON 格式**，后续可扩展 CSV 等格式
+- 存储层通过接口抽象：底层是**与行格式无关的纯文本行存储引擎**（`TextLineStore` + WAL），行编解码器（JSONL / CSV）可插拔
 
 > 说明：这是一个实验项目，目标是把"能跑通的 SQL 引擎骨架"讲清楚，不追求与 MySQL 完全一致，也不提供事务、外键、视图、存储过程等高级特性。
 
@@ -40,6 +41,7 @@ dotnet src\JSql\bin\Debug\net10.0\JSql.exe --db D:\data\jsql
 | `--no-fsync` | 默认 | 每条语句结束时 flush 一次日志（写入快，断电可能丢最后一条语句） |
 | `--fsync` | | 每次写操作都 fsync 日志（慢一些，断电级安全） |
 | `--legacy-json` | | 新建表仍使用旧版单文件 `.json` 布局（便于对比） |
+| `--format <jsonl\|csv>` | `jsonl` | 新建表使用的行存储格式（别名 `--storage`，也支持 `--format=csv`） |
 | `--verbose` | | 把存储层诊断（索引重建、撕裂尾修复、checkpoint）打印到 stderr |
 
 ### 3. 第一次使用
@@ -69,21 +71,26 @@ REPL 规则：语句以 `;` 结尾，未输入分号时可**多行续行**（提
 
 ## 数据是怎么存的
 
-数据根目录下的每个子目录是一个数据库。每张表的 **schema 与数据分开存放**，数据文件是 **JSONL**（一行一条记录）并由底层的 **WAL（写前日志）引擎**管理：
+数据根目录下的每个子目录是一个数据库。每张表的 **schema 与数据分开存放**：schema 写入 `<表>.schema.json`，行数据写入数据文件，二者都由底层的 **行存储引擎（稀疏行索引 + WAL 写前日志）** 管理。数据文件可以是 **JSONL**（一行一个 JSON 对象，默认）或 **CSV**（第 1 行表头 + 后续数据行），打开时按文件扩展名自动识别：
 
 ```
 D:\data\jsql\
 └── shop\                            <- 数据库 shop
-    ├── orders.schema.json           <- 表结构（列、注释、表级键）
-    ├── orders.jsonl                 <- 行数据：每行一条 JSON 记录
+    ├── orders.schema.json           <- 表结构（列类型、注释、表级键）
+    ├── orders.jsonl                 <- JSONL 行数据：每行一条 JSON 记录
     ├── orders.jsonl.wal             <- 写前日志（未合并的增删改）
     ├── orders.jsonl.idx             <- 数据文件的稀疏行索引
     ├── orders.jsonl.lock            <- 进程独占锁
-    ├── users.schema.json
-    ├── users.jsonl
+    ├── customers.schema.json
+    ├── customers.csv                <- CSV 行数据：首行表头，其后每行一条记录
+    ├── customers.csv.wal            <- 对应 CSV 表的写前日志
+    ├── customers.csv.idx
+    ├── customers.csv.lock
     └── .indexes\                    <- 列索引（哈希/范围/全文）
         └── orders_amount_range.idx
 ```
+
+> CSV 表同样拥有一份独立的 `<表>.schema.json`——CSV 文件只承载表头与行数据（不含列类型、NOT NULL、键、注释），这些元数据保存在 schema 文件中，`DESCRIBE` 读的就是它。列类型缺失的信息不会被推断。
 
 schema 文件示例（`orders.schema.json`）：
 
@@ -108,6 +115,16 @@ schema 文件示例（`orders.schema.json`）：
 {"oid":1,"customer":"alice","amount":120.5,"created":"2026-09-11 10:00:00"}
 {"oid":2,"customer":"bob","amount":80,"created":"2026-09-11 10:05:00"}
 ```
+
+CSV 数据文件示例（`customers.csv`，第 1 行为表头，列序与 schema 一致）：
+
+```csv
+oid,customer,amount,created
+1,alice,120.5,2026-09-11 10:00:00
+2,bob,80,2026-09-11 10:05:00
+```
+
+CSV 单元格内的逗号、双引号会按 RFC 4180 规则用双引号包裹并转义；由于底层是**行式**引擎（一行一条记录），单元格内的换行符在写盘时会被规范化为空格。
 
 ### 写入路径与 WAL
 
@@ -253,14 +270,19 @@ src\JSql\
 │   ├── ITableStore.vb          # 类型规范化/值强转 + 表模型 + 旧整表读写接口
 │   ├── JsonTableStore.vb       # 旧版单文件 JSON 表（迁移期读取与 --legacy-json）
 │   ├── ITableSession.vb        # 表会话接口（行级读写 / 同步 / 合并 / 状态）
-│   ├── JsonlTableSession.vb    # JSONL 会话：行编解码、行级差异同步、WAL 合并
+│   ├── IRowCodec.vb            # 行编解码抽象（格式无关：行对象 <-> 单行文本）
+│   ├── JsonRowCodec.vb         # JSONL 行编解码（委托 RowJson）
+│   ├── CsvRowCodec.vb          # CSV 行编解码（HeaderSchema / CharsParser / RowObject.ToString）
+│   ├── TextTableSession.vb     # 通用会话：行存储引擎 + 行编解码器，行级差异同步、WAL 合并
+│   ├── JsonlTableSession.vb    # JSONL 会话（TextTableSession + JsonRowCodec 的薄封装）
+│   ├── CsvTableSession.vb      # CSV 会话（TextTableSession + CsvRowCodec 的薄封装）
 │   ├── RowJson.vb              # 行 <-> JSONL 编解码（按 schema 列序）
 │   ├── SchemaStore.vb          # <表>.schema.json 原子读写与旧格式读取
-│   ├── StorageLayout.vb        # 文件命名/发现规则（排除 .wal/.idx/.lock 等伴生文件）
-│   ├── StorageOptions.vb       # 存储开关（合并间隔、fsync、诊断、兼容模式）
+│   ├── StorageLayout.vb        # 文件命名/发现规则（.jsonl/.csv 与 .wal/.idx/.lock 等伴生文件）
+│   ├── StorageOptions.vb       # 存储开关（格式、合并间隔、fsync、诊断、兼容模式）
 │   ├── TableSessionPool.vb     # 会话缓存与独占锁管理、统一合并/关闭
 │   ├── IdleMergeScheduler.vb   # 空闲时后台 checkpoint（与语句执行互斥）
-│   └── DatabaseCatalog.vb      # 库/表目录管理、加载保存、迁移与清理
+│   └── DatabaseCatalog.vb      # 库/表目录管理、加载保存、格式识别、迁移与清理
 └── Indexing\
     ├── JsonMemoryIndex.vb  # 继承 LINQ MemoryIndex 的 JSON 行集合适配器
     ├── IndexManager.vb     # 索引门面：建/删索引、WHERE 条件探测、写后重建
@@ -276,7 +298,7 @@ src\JSql\
 - .NET 10（VB.NET）
 - 项目引用（无需额外安装 NuGet 包）：
   - `GCModeller\src\runtime\Darwinism\src\data\LINQ\LINQ\LINQ.vbproj`：提供 `MemoryIndex`、`TermHashIndex`、`RangeIndex`、`FTSEngine` 等索引算法
-  - `sciBASIC#\Microsoft.VisualBasic.Core`：除基础库外还提供 `Data.Repository.JsonlStore`（JSONL + WAL 存储引擎）
+  - `sciBASIC#\Microsoft.VisualBasic.Core`：除基础库外还提供 `Data.Repository.TextLineStore`（与行格式无关的纯文本行存储引擎 + WAL；`JsonlStore` 为其兼容别名）
   - `sciBASIC#\Data\DataFrame`：DataFrame 基础库
 
 ## 已知限制
@@ -286,6 +308,9 @@ src\JSql\
 - 表级 `UNIQUE KEY` / `KEY` 仅作为 schema 元数据记录，不会自动生成物理索引、也不做唯一性校验；需要索引请用 `CREATE INDEX`
 - `AUTO_INCREMENT` 语法会被接受但不生成自增序号，需自行指定主键值
 - 单进程独占：同一张表的数据文件被打开时持有独占锁，同一个数据库目录同时只能被一个 JSql 实例打开（退出时会自动 checkpoint 并释放锁）
+- CSV 是**行式**存储：单元格内的换行符在写盘时被规范化为空格（否则会破坏“一行一条记录”的行边界）；CSV 中的空单元格读取为 `NULL`，因此无法区分空字符串与 `NULL`
+- CSV 文件的列顺序以 schema 列序为权威：读取外部 CSV 时按其表头做列名映射（列序可不同），保存时会把表头刷新为 schema 列序
+- 已有表按其数据文件扩展名（`.jsonl` / `.csv`）自动识别，`--format` 只影响**新建表**的默认格式；同一个数据库目录内可以同时存在两种格式的表
 - 持久性分级：默认 `--no-fsync`（每条语句 flush 一次日志，能防进程崩溃，断电可能丢最后一条语句）；需要断电级安全请加 `--fsync`
 - 空闲合并（checkpoint）在后台执行，`SHOW STORAGE` 可以观察"未合并操作数"；`CHECKPOINT` 与退出流程都会强制合并
 - 单表数据全部载入内存后参与查询与索引构建，适合中小规模数据；无并发写入保护

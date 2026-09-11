@@ -871,7 +871,7 @@ Namespace Engine
                     If stmt.Target Is Nothing Then
                         rows.AddRange(engine.Catalog.DescribeStorage(db))
                     Else
-                        Dim session As JsonlTableSession = engine.Catalog.TryGetSession(db, stmt.Target)
+                        Dim session As ITableSession = engine.Catalog.TryGetSession(db, stmt.Target)
 
                         If session IsNot Nothing Then
                             rows.Add(New Object() {session.TableName, session.Layout, session.LineCount,
