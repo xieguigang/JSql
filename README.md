@@ -291,7 +291,7 @@ src\JSql\
 
 查询的执行顺序：`SQL 文本 → Tokenizer → SqlParser(AST) → Executor`，其中 `WHERE` 会先交给 `IndexManager` 探测可用索引得到候选行，再做表达式精确过滤（索引只做候选集收缩，正确性由表达式求值保证；索引异常时自动退回全表扫描）。
 
-写入的执行顺序：`Executor → DatabaseCatalog.SaveTable → JsonlTableSession.SyncRows(行级差异) → JsonlStore(内存片段层 + WAL) → 空闲/退出时 Merge() 合并回 *.jsonl`。数据文件与 WAL 的崩溃安全由底层引擎（合并标记 + `.bak` + 撕裂写回滚）保证。
+写入的执行顺序：`Executor → DatabaseCatalog.SaveTable → TextTableSession.SyncRows(行级差异) → TextLineStore(内存片段层 + WAL) → 空闲/退出时 Merge() 合并回数据文件`。数据文件与 WAL 的崩溃安全由底层引擎（合并标记 + `.bak` + 撕裂写回滚）保证。
 
 ## 依赖
 

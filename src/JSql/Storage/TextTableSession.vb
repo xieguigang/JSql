@@ -87,7 +87,14 @@ Namespace Storage
 
         Public ReadOnly Property LineCount As Long Implements ITableSession.LineCount
             Get
-                Return _store.TotalLines
+                Dim total As Long = _store.TotalLines
+
+                ' 有表头行的格式（CSV）里物理首行是表头，不计入数据行数
+                If _codec.HasHeader AndAlso total > 0 Then
+                    Return total - 1
+                End If
+
+                Return total
             End Get
         End Property
 
