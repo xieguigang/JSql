@@ -31,6 +31,17 @@ dotnet src\JSql\bin\Debug\net10.0\JSql.exe --db D:\data\jsql
 
 数据根目录的选取顺序：`--db <dir>` / `-d <dir>` / `--db=<dir>` → 环境变量 `JSQL_HOME` → 当前目录下的 `jsql-data`。目录不存在时会自动创建。
 
+存储相关开关（可选）：
+
+| 开关 | 默认 | 说明 |
+|---|---|---|
+| `--merge-idle <秒>` | `30` | 空闲多久后把 WAL 合并回数据文件；`0` 关闭后台合并 |
+| `--merge-after <n>` | `2000` | 单表未合并操作数达到 n 时提前合并 |
+| `--no-fsync` | 默认 | 每条语句结束时 flush 一次日志（写入快，断电可能丢最后一条语句） |
+| `--fsync` | | 每次写操作都 fsync 日志（慢一些，断电级安全） |
+| `--legacy-json` | | 新建表仍使用旧版单文件 `.json` 布局（便于对比） |
+| `--verbose` | | 把存储层诊断（索引重建、撕裂尾修复、checkpoint）打印到 stderr |
+
 ### 3. 第一次使用
 
 ```sql
@@ -58,18 +69,23 @@ REPL 规则：语句以 `;` 结尾，未输入分号时可**多行续行**（提
 
 ## 数据是怎么存的
 
-数据根目录下的每个子目录是一个数据库：
+数据根目录下的每个子目录是一个数据库。每张表的 **schema 与数据分开存放**，数据文件是 **JSONL**（一行一条记录）并由底层的 **WAL（写前日志）引擎**管理：
 
 ```
 D:\data\jsql\
-└── shop\                      <- 数据库 shop
-    ├── orders.json            <- 数据表 orders（schema + 行数据）
-    ├── users.json
-    └── .indexes\              <- 该库的索引文件
+└── shop\                            <- 数据库 shop
+    ├── orders.schema.json           <- 表结构（列、注释、表级键）
+    ├── orders.jsonl                 <- 行数据：每行一条 JSON 记录
+    ├── orders.jsonl.wal             <- 写前日志（未合并的增删改）
+    ├── orders.jsonl.idx             <- 数据文件的稀疏行索引
+    ├── orders.jsonl.lock            <- 进程独占锁
+    ├── users.schema.json
+    ├── users.jsonl
+    └── .indexes\                    <- 列索引（哈希/范围/全文）
         └── orders_amount_range.idx
 ```
 
-表文件示例（`orders.json`）：
+schema 文件示例（`orders.schema.json`）：
 
 ```json
 {
@@ -82,16 +98,36 @@ D:\data\jsql\
     { "name": "oid", "type": "INT", "notNull": true, "primaryKey": true, "defaultValue": null, "comment": null },
     { "name": "customer", "type": "VARCHAR(40)", "notNull": true, "primaryKey": false, "defaultValue": null,
       "comment": "customer name" }
-  ],
-  "rows": [
-    { "oid": 1, "customer": "alice", "amount": 120.5, "created": "2026-09-11 10:00:00" }
   ]
 }
 ```
 
-- 写表采用**临时文件 + 替换**的原子写入，避免进程中断把表文件写坏
+数据文件示例（`orders.jsonl`，每行一条记录，行号即行序，从 1 开始）：
+
+```jsonl
+{"oid":1,"customer":"alice","amount":120.5,"created":"2026-09-11 10:00:00"}
+{"oid":2,"customer":"bob","amount":80,"created":"2026-09-11 10:05:00"}
+```
+
+### 写入路径与 WAL
+
+- `INSERT` → 数据文件末尾追加（一次日志记录 + 一次 flush）
+- `UPDATE` → 只替换变化的行；`DELETE` → 只删除对应行区间
+- 所有修改先写 WAL，再由底层引擎把挂起修改"虚拟挂载"到读取结果上，因此**写完立刻能读到**
+- **空闲合并（checkpoint）**：引擎空闲超过一段时间（默认 30s）后自动把 WAL 合并回 `*.jsonl` 并清空日志；也可随时手动触发
+- 进程崩溃后重新打开表时会**重放 WAL**，未合并的写入不会丢失
+
+### 查看与维护
+
+```sql
+SHOW STORAGE [FROM t];   -- 行数 / 未合并操作数 / WAL 大小 / 数据文件大小 / 布局
+CHECKPOINT [TABLE t];    -- 立刻把 WAL 合并回数据文件
+```
+
+- schema 采用**临时文件 + 替换**的原子写入；数据文件的合并由底层引擎保证崩溃安全（合并标记 + `.bak`）
 - 注释（`COMMENT`）作为 schema 的一部分落盘，`DESCRIBE` 可以直接查看
 - 索引文件位于库目录的 `.indexes` 子目录，命名规则 `<表>_<列>_<索引类型>.idx`，随表数据变更自动重建
+- 旧版单文件 `<表>.json` 表**仍可读取**；第一次写入时会自动迁移为上述双文件布局，原文件保留为 `<表>.json.bak`
 
 ---
 
@@ -191,7 +227,9 @@ USE db;                    -- 切换数据库
 SHOW DATABASES;
 SHOW TABLES [FROM db];
 SHOW INDEXES FROM t;       -- 列出该表的物理索引（*.idx）
+SHOW STORAGE [FROM t];     -- 存储状态：行数 / 未合并 WAL 操作数 / 文件大小 / 布局
 DESCRIBE t;                -- 同 SHOW COLUMNS FROM t，输出 Field/Type/Null/Key/Default/Comment
+CHECKPOINT [TABLE t];      -- 把 WAL 合并回 JSONL 数据文件（退出时也会自动执行）
 help | clear | quit        -- REPL 内置命令
 ```
 
@@ -212,9 +250,17 @@ src\JSql\
 │   ├── ExpressionEvaluator.vb  # 表达式求值与聚合计算
 │   └── ResultSet.vb        # 查询结果模型
 ├── Storage\
-│   ├── ITableStore.vb      # 存储抽象 + 类型规范化/值强转 + 按扩展名分发的工厂
-│   ├── JsonTableStore.vb   # JSON 表存储（schema + 行数据，原子写回）
-│   └── DatabaseCatalog.vb  # 库/表目录管理
+│   ├── ITableStore.vb          # 类型规范化/值强转 + 表模型 + 旧整表读写接口
+│   ├── JsonTableStore.vb       # 旧版单文件 JSON 表（迁移期读取与 --legacy-json）
+│   ├── ITableSession.vb        # 表会话接口（行级读写 / 同步 / 合并 / 状态）
+│   ├── JsonlTableSession.vb    # JSONL 会话：行编解码、行级差异同步、WAL 合并
+│   ├── RowJson.vb              # 行 <-> JSONL 编解码（按 schema 列序）
+│   ├── SchemaStore.vb          # <表>.schema.json 原子读写与旧格式读取
+│   ├── StorageLayout.vb        # 文件命名/发现规则（排除 .wal/.idx/.lock 等伴生文件）
+│   ├── StorageOptions.vb       # 存储开关（合并间隔、fsync、诊断、兼容模式）
+│   ├── TableSessionPool.vb     # 会话缓存与独占锁管理、统一合并/关闭
+│   ├── IdleMergeScheduler.vb   # 空闲时后台 checkpoint（与语句执行互斥）
+│   └── DatabaseCatalog.vb      # 库/表目录管理、加载保存、迁移与清理
 └── Indexing\
     ├── JsonMemoryIndex.vb  # 继承 LINQ MemoryIndex 的 JSON 行集合适配器
     ├── IndexManager.vb     # 索引门面：建/删索引、WHERE 条件探测、写后重建
@@ -223,12 +269,15 @@ src\JSql\
 
 查询的执行顺序：`SQL 文本 → Tokenizer → SqlParser(AST) → Executor`，其中 `WHERE` 会先交给 `IndexManager` 探测可用索引得到候选行，再做表达式精确过滤（索引只做候选集收缩，正确性由表达式求值保证；索引异常时自动退回全表扫描）。
 
+写入的执行顺序：`Executor → DatabaseCatalog.SaveTable → JsonlTableSession.SyncRows(行级差异) → JsonlStore(内存片段层 + WAL) → 空闲/退出时 Merge() 合并回 *.jsonl`。数据文件与 WAL 的崩溃安全由底层引擎（合并标记 + `.bak` + 撕裂写回滚）保证。
+
 ## 依赖
 
 - .NET 10（VB.NET）
 - 项目引用（无需额外安装 NuGet 包）：
   - `GCModeller\src\runtime\Darwinism\src\data\LINQ\LINQ\LINQ.vbproj`：提供 `MemoryIndex`、`TermHashIndex`、`RangeIndex`、`FTSEngine` 等索引算法
-  - `sciBASIC#\Data\DataFrame`、`sciBASIC#\Microsoft.VisualBasic.Core`：基础库
+  - `sciBASIC#\Microsoft.VisualBasic.Core`：除基础库外还提供 `Data.Repository.JsonlStore`（JSONL + WAL 存储引擎）
+  - `sciBASIC#\Data\DataFrame`：DataFrame 基础库
 
 ## 已知限制
 
@@ -236,7 +285,10 @@ src\JSql\
 - `LIKE` 不参与索引加速（全文索引为分词匹配，用于 `LIKE` 可能漏匹配，因此保持全表扫描以保证结果正确）
 - 表级 `UNIQUE KEY` / `KEY` 仅作为 schema 元数据记录，不会自动生成物理索引、也不做唯一性校验；需要索引请用 `CREATE INDEX`
 - `AUTO_INCREMENT` 语法会被接受但不生成自增序号，需自行指定主键值
-- 每次写操作为整表重写，适合小表与实验场景；单进程 REPL，无并发写入保护
+- 单进程独占：同一张表的数据文件被打开时持有独占锁，同一个数据库目录同时只能被一个 JSql 实例打开（退出时会自动 checkpoint 并释放锁）
+- 持久性分级：默认 `--no-fsync`（每条语句 flush 一次日志，能防进程崩溃，断电可能丢最后一条语句）；需要断电级安全请加 `--fsync`
+- 空闲合并（checkpoint）在后台执行，`SHOW STORAGE` 可以观察"未合并操作数"；`CHECKPOINT` 与退出流程都会强制合并
+- 单表数据全部载入内存后参与查询与索引构建，适合中小规模数据；无并发写入保护
 
 ## License
 
