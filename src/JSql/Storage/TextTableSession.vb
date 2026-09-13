@@ -236,6 +236,10 @@ Namespace Storage
             _store.Merge()
         End Sub
 
+        Public Function TryMerge() As Boolean Implements ITableSession.TryMerge
+            Return _store.TryMerge()
+        End Function
+
         ''' <summary>物理第 index 行（1 基）是否为表头行。</summary>
         Private Function IsHeaderLine(index As Integer) As Boolean
             Return _codec.HasHeader AndAlso index = 1

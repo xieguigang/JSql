@@ -12,6 +12,10 @@ Namespace Storage
         Private ReadOnly _sessions As New Dictionary(Of String, ITableSession)(StringComparer.OrdinalIgnoreCase)
         Private ReadOnly _gate As New Object
 
+        ''' <summary>the outcome of the last checkpoint, used by the scheduler</summary>
+        Private _lastMergeErrors As Integer
+        Private _lastMergePostponed As Integer
+
         ''' <summary>raised when a session reports a diagnostic message</summary>
         Public Event Info(message As String)
 
@@ -128,23 +132,52 @@ Namespace Storage
             Next
         End Sub
 
+        ''' <summary>how many tables failed to merge during the last checkpoint</summary>
+        Public ReadOnly Property LastMergeErrors As Integer
+            Get
+                Return _lastMergeErrors
+            End Get
+        End Property
+
+        ''' <summary>how many tables postponed their merge during the last checkpoint</summary>
+        Public ReadOnly Property LastMergePostponed As Integer
+            Get
+                Return _lastMergePostponed
+            End Get
+        End Property
+
         ''' <summary>
         ''' merge the pending write ahead log of every open session. returns the
-        ''' number of merged tables.
+        ''' number of merged tables. a table which could not be merged right now (a
+        ''' read enumeration is still active) is postponed, so that the caller is
+        ''' able to retry it on the next checkpoint instead of treating it as done.
         ''' </summary>
         Public Function MergeAll(Optional force As Boolean = False) As Integer
             Dim merged As Integer = 0
+            Dim errors As Integer = 0
+            Dim postponed As Integer = 0
 
             For Each session As ITableSession In OpenSessions()
                 Try
                     If force OrElse session.HasPendingChanges Then
-                        session.Merge()
-                        merged += 1
+                        If session.TryMerge() Then
+                            merged += 1
+                        Else
+                            postponed += 1
+                        End If
                     End If
                 Catch ex As Exception
-                    RaiseEvent Info("merge failed for " & session.TableName & ": " & ex.Message)
+                    errors += 1
+                    RaiseError("merge failed for " & session.TableName & ": " & ex.Message)
                 End Try
             Next
+
+            _lastMergeErrors = errors
+            _lastMergePostponed = postponed
+
+            If postponed > 0 Then
+                RaiseEvent Info("merge postponed for " & postponed & " table(s)")
+            End If
 
             Return merged
         End Function
@@ -152,20 +185,44 @@ Namespace Storage
         ''' <summary>merge the tables whose pending operation count exceeds the threshold</summary>
         Public Function MergeOverloaded(threshold As Integer) As Integer
             Dim merged As Integer = 0
+            Dim errors As Integer = 0
+            Dim postponed As Integer = 0
 
             For Each session As ITableSession In OpenSessions()
                 Try
                     If session.PendingOperations >= threshold AndAlso session.HasPendingChanges Then
-                        session.Merge()
-                        merged += 1
+                        If session.TryMerge() Then
+                            merged += 1
+                        Else
+                            postponed += 1
+                        End If
                     End If
                 Catch ex As Exception
-                    RaiseEvent Info("merge failed for " & session.TableName & ": " & ex.Message)
+                    errors += 1
+                    RaiseError("merge failed for " & session.TableName & ": " & ex.Message)
                 End Try
             Next
 
+            _lastMergeErrors += errors
+            _lastMergePostponed += postponed
+
             Return merged
         End Function
+
+        ''' <summary>
+        ''' a checkpoint problem must never be silent: it is published through the
+        ''' <see cref="Info"/> event and written to stderr when nobody listens, so
+        ''' that a stuck write ahead log is always visible in the server log.
+        ''' </summary>
+        Private Sub RaiseError(message As String)
+            RaiseEvent Info(message)
+
+            Try
+                Console.Error.WriteLine("[jsql] " & message)
+            Catch
+                ' the diagnostics must never break the checkpoint itself
+            End Try
+        End Sub
 
         Public Sub DisposeAll()
             Dim sessions As List(Of ITableSession) = OpenSessions()
@@ -179,7 +236,7 @@ Namespace Storage
 
                 Try
                     If session.HasPendingChanges Then
-                        session.Merge()
+                        Call session.TryMerge()
                     End If
                 Catch
                     ' a broken merge must not block the shutdown

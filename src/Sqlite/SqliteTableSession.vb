@@ -258,6 +258,15 @@ Public Class SqliteTableSession
         Commit()
     End Sub
 
+    ''' <summary>
+    ''' 把整个数据库的内存模型提交到磁盘。SQLite 后端没有独立的 WAL 文件，也不存在
+    ''' 「读枚举未完成」的限制，因此提交总是成功（幂等）。
+    ''' </summary>
+    Public Function TryMerge() As Boolean Implements ITableSession.TryMerge
+        Commit()
+        Return True
+    End Function
+
     Private Sub Commit()
         If _writer.IsDirty Then
             _writer.Commit()

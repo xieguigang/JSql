@@ -45,6 +45,16 @@ Namespace Storage
         ''' <summary>merge the pending WAL operations back into the data file</summary>
         Sub Merge()
 
+        ''' <summary>
+        ''' try to merge the pending WAL operations back into the data file.
+        ''' </summary>
+        ''' <returns>
+        ''' True when the merge has been done (or there was nothing to merge);
+        ''' False when the merge has been postponed and should be retried later, for
+        ''' example because a read enumeration is still active.
+        ''' </returns>
+        Function TryMerge() As Boolean
+
         Event Info(message As String)
     End Interface
 End Namespace
