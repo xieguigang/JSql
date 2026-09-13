@@ -9,6 +9,40 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>
 
+  <PropertyGroup Label="nuget package">
+    <PackageId>JSql</PackageId>
+    <Version>1.0.2.123</Version>
+    <AssemblyVersion>1.0.2.123</AssemblyVersion>
+    <FileVersion>1.0.2.123</FileVersion>
+    <Title>JSql - an experimental sql engine over pluggable file storage</Title>
+    <AssemblyTitle>JSql</AssemblyTitle>
+    <Description>JSql is an experimental SQL engine written in VB.NET. It ships a hand written SQL front end (tokenizer, recursive descent parser and execution engine) for a MySQL compatible subset, on top of a pluggable file based storage layer. Physical storage is abstracted by IDbFileStorageProvider, so the file engine can be swapped at runtime: the built in TextFileStorage backend keeps one database as one folder (a per-table .schema.json schema file plus JSONL or CSV row data guarded by a write ahead log), while other backends such as the SQLite file backend are injected through SqlEngine.SetStorage. Supported: CREATE/DROP DATABASE, TABLE and INDEX, INSERT, UPDATE, DELETE, and SELECT with DISTINCT, INNER/LEFT JOIN, WHERE, GROUP BY, HAVING, ORDER BY and LIMIT, arithmetic and comparison expressions, aggregates, plus persisted column indexes (hash, range and full text) that are rebuilt after a write and restored on restart.</Description>
+    <PackageTags>scibasic;jsql;sql;sql-engine;sql-parser;database;storage-engine;jsonl;csv;sqlite;wal;vbnet</PackageTags>
+    <PackageReleaseNotes>1.0.2.123
++ IDbFileStorageProvider: the storage layer is now a pluggable, database scoped backend contract (database/table catalog, table sessions, load/save/delete, storage diagnostics).
++ SqlEngine can switch the physical file engine at runtime through SetStorage(provider) or New(provider, options); the Catalog property is kept as a backwards compatible alias.
+* DatabaseCatalog is renamed to TextFileStorage and now implements IDbFileStorageProvider, the jsonl/csv on disk layout is unchanged.
+* IndexManager depends on IDbFileStorageProvider instead of the concrete catalog.
++ New JSql.Sqlite backend: one JSql database is stored as one .sqlite file holding every table of that database.
++ REPL host: new --backend text|sqlite switch (alias --engine) that injects the storage provider.
+Earlier: pluggable row codecs (JSONL / CSV), sparse line index plus WAL text line store, persisted column indexes.</PackageReleaseNotes>
+    <Authors>xieguigang &lt;I@xieguigang.me&gt;</Authors>
+    <Company>sciBASIC.NET Foundation</Company>
+    <Copyright>Copyright (c) 2021-2026 この中二病に爆焔を！</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
+    <PackageProjectUrl>https://github.com/xieguigang/JSql</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/xieguigang/JSql</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>True</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="True" PackagePath="\" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\..\GCModeller\src\runtime\Darwinism\src\data\LINQ\LINQ\LINQ.vbproj" />
     <ProjectReference Include="..\..\..\GCModeller\src\runtime\sciBASIC#\Data\DataFrame\dataframework-netcore5.vbproj" />

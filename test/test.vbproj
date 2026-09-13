@@ -7,6 +7,22 @@
     <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
+  <PropertyGroup Label="assembly metadata">
+    <Version>1.0.2.123</Version>
+    <AssemblyVersion>1.0.2.123</AssemblyVersion>
+    <FileVersion>1.0.2.123</FileVersion>
+    <Title>JSql storage tests</Title>
+    <AssemblyTitle>JSql storage tests</AssemblyTitle>
+    <Description>Console test host of JSql: runs the JSONL/CSV storage format demo (test demo), the SQLite backend end to end regression (test sqlite), the storage read/write stress benchmark (test stress) or all of them (test all). The stress suite accepts --size, --rows, --format, --sql-rows and --cleanup.</Description>
+    <Authors>xieguigang &lt;I@xieguigang.me&gt;</Authors>
+    <Company>sciBASIC.NET Foundation</Company>
+    <Copyright>Copyright (c) 2021-2026 この中二病に爆焔を！</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/xieguigang/JSql</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/xieguigang/JSql</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\GCModeller\src\runtime\Darwinism\src\data\LINQ\LINQ\LINQ.vbproj" />
     <ProjectReference Include="..\..\GCModeller\src\runtime\sciBASIC#\Data\DataFrame\dataframework-netcore5.vbproj" />

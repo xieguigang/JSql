@@ -8,6 +8,37 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>
 
+  <PropertyGroup Label="nuget package">
+    <PackageId>JSql.Sqlite</PackageId>
+    <Version>1.0.2.123</Version>
+    <AssemblyVersion>1.0.2.123</AssemblyVersion>
+    <FileVersion>1.0.2.123</FileVersion>
+    <Title>JSql.Sqlite - sqlite database file storage backend for JSql</Title>
+    <AssemblyTitle>JSql.Sqlite</AssemblyTitle>
+    <Description>SQLite database file storage backend for JSql. Implements IDbFileStorageProvider, so JSql can persist one database as one .sqlite file that holds every table of that database, built on top of the pure managed SQLite3 reader and writer (no native sqlite engine is required). Row data is written into the SQLite tables themselves, so the produced file can be opened with any other SQLite tool; the JSql schema metadata that SQLite DDL cannot carry (raw column type text, COMMENT, DEFAULT and table level keys) together with the column indexes are kept in an auxiliary folder, so DESCRIBE, SHOW INDEXES, SHOW STORAGE and CHECKPOINT keep working. Inject it with SqlEngine.SetStorage(New SqliteStorage(root, options)) or start the REPL host with --backend sqlite.</Description>
+    <PackageTags>scibasic;jsql;sqlite;sqlite3;storage-engine;database;btree;vbnet</PackageTags>
+    <PackageReleaseNotes>1.0.2.123
++ First release of the SQLite database file backend for JSql.
++ SqliteStorage implements IDbFileStorageProvider: one JSql database is one .sqlite file, all of its tables live in that single file.
++ SqliteTableSession implements ITableSession and bridges the managed Sqlite3Writer/Sqlite3TableWriter: append only changes take the AddRow fast path, the whole table is rebuilt otherwise, and the file is rewritten on Merge/CHECKPOINT/idle merge/shutdown.
++ SqliteSchemaMapper maps the JSql canonical types to SQLite declared types (INT to INTEGER, DOUBLE to FLOAT, VARCHAR/DATE/DATETIME to TEXT, BOOLEAN to BOOLEAN), reverse engineers a JSql schema from the CREATE TABLE DDL and normalizes row values on the round trip.</PackageReleaseNotes>
+    <Authors>xieguigang &lt;I@xieguigang.me&gt;</Authors>
+    <Company>sciBASIC.NET Foundation</Company>
+    <Copyright>Copyright (c) 2021-2026 この中二病に爆焔を！</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
+    <PackageProjectUrl>https://github.com/xieguigang/JSql</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/xieguigang/JSql</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>True</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="True" PackagePath="\" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\..\GCModeller\src\runtime\Darwinism\src\data\LINQ\LINQ\LINQ.vbproj" />
     <ProjectReference Include="..\..\..\GCModeller\src\runtime\sciBASIC#\Data\BinaryData\BinaryData\binarydata-netcore5.vbproj" />

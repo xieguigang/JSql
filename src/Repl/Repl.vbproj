@@ -7,6 +7,22 @@
     <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
+  <PropertyGroup Label="assembly metadata">
+    <Version>1.0.2.123</Version>
+    <AssemblyVersion>1.0.2.123</AssemblyVersion>
+    <FileVersion>1.0.2.123</FileVersion>
+    <Title>JSql REPL host</Title>
+    <AssemblyTitle>JSql REPL host</AssemblyTitle>
+    <Description>Command line REPL host of JSql: reads SQL statements interactively (multi line input until the terminating semicolon, prompt switches to "->"), prints result sets as text tables and exposes the storage switches, including --backend text|sqlite (alias --engine) which selects the physical storage backend, --format jsonl|csv for the row format of new tables, --merge-idle, --merge-after, --fsync/--no-fsync, --legacy-json and --verbose.</Description>
+    <Authors>xieguigang &lt;I@xieguigang.me&gt;</Authors>
+    <Company>sciBASIC.NET Foundation</Company>
+    <Copyright>Copyright (c) 2021-2026 この中二病に爆焔を！</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/xieguigang/JSql</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/xieguigang/JSql</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\..\GCModeller\src\runtime\Darwinism\src\data\LINQ\LINQ\LINQ.vbproj" />
     <ProjectReference Include="..\..\..\GCModeller\src\runtime\sciBASIC#\Data\DataFrame\dataframework-netcore5.vbproj" />
