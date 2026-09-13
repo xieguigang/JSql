@@ -19,6 +19,13 @@ Namespace Storage
         Private _lastMerge As Date
         Private _disposed As Boolean
 
+        ''' <summary>the number of the timer callbacks which have been executed</summary>
+        Private _ticks As Integer
+        ''' <summary>true when the periodic timer has actually been armed</summary>
+        Private _running As Boolean
+        ''' <summary>the last exception of the merge loop, kept for diagnostics</summary>
+        Private _lastError As String
+
         Public Event Info(message As String)
 
         Sub New(pool As TableSessionPool, options As StorageOptions)
@@ -48,11 +55,33 @@ Namespace Storage
             End Get
         End Property
 
+        ''' <summary>the number of the timer callbacks which have been executed</summary>
+        Public ReadOnly Property TickCount As Integer
+            Get
+                Return _ticks
+            End Get
+        End Property
+
+        ''' <summary>true when the periodic timer has actually been armed</summary>
+        Public ReadOnly Property IsRunning As Boolean
+            Get
+                Return _running
+            End Get
+        End Property
+
+        ''' <summary>the last exception of the merge loop, kept for diagnostics</summary>
+        Public ReadOnly Property LastError As String
+            Get
+                Return _lastError
+            End Get
+        End Property
+
         Public Sub Start()
             If _disposed OrElse _options.MergeIdleSeconds <= 0 Then
                 Return
             End If
 
+            _running = True
             _timer.Change(1000, 1000)
         End Sub
 
@@ -81,6 +110,8 @@ Namespace Storage
         End Sub
 
         Private Sub OnTick(state As Object)
+            Interlocked.Increment(_ticks)
+
             If _disposed Then
                 Return
             End If
@@ -124,6 +155,7 @@ Namespace Storage
                     Touch()
                 End If
             Catch ex As Exception
+                _lastError = ex.Message
                 RaiseEvent Info("checkpoint failed: " & ex.Message)
             Finally
                 Interlocked.Exchange(_merging, 0)
