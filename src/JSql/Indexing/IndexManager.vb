@@ -359,8 +359,6 @@ Namespace Indexing
         ''' or nothing when no usable index exists(first calldb the caller falls back to
         ''' a full table scan).
         ''' </summary>
-        ' ==================== index probing ====================
-
         Private Class IndexProbe
 
             ''' <summary>a term hash query, nothing when this probe is a range probe</summary>
