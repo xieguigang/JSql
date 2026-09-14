@@ -350,6 +350,30 @@ Public Class SqliteStorage
         }
     End Function
 
+    ''' <summary>
+    ''' 只读取表结构：优先读辅助目录中的 schema 文件，其次从 SQLite 表的 DDL 反解，
+    ''' 不创建表会话（因此不会取表锁）。
+    ''' </summary>
+    Public Function LoadSchema(db As String, table As String) As TableSchema Implements IDbFileStorageProvider.LoadSchema
+        If Not TableExists(db, table) Then
+            Throw New ArgumentException("table '" & table & "' not found in database '" & db & "'!")
+        End If
+
+        Dim schemaFile As String = SchemaPath(db, table)
+
+        If File.Exists(schemaFile) Then
+            Return SchemaStore.Read(schemaFile)
+        End If
+
+        Dim existing As Sqlite3TableWriter = TryGetTableWriter(db, table)
+
+        If existing IsNot Nothing Then
+            Return SchemaOf(existing, table)
+        End If
+
+        Return OpenSession(db, table).Schema
+    End Function
+
     Public Sub SaveTable(db As String, table As StoredTable) Implements IDbFileStorageProvider.SaveTable
         Dim session As ITableSession = OpenSession(db, table.Schema.TableName)
 

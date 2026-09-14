@@ -26,6 +26,11 @@ Module Program
                 exitCode = StorageFormatDemoTests.Run()
             Case "sqlite"
                 exitCode = StorageSqliteTests.Run()
+            Case "multiprocess"
+                exitCode = StorageMultiProcessTests.Run()
+            Case "hold"
+                ' 内部子进程入口：多进程测试用它来持锁
+                exitCode = StorageMultiProcessTests.RunLockHolderWorker(args)
             Case "stress"
                 exitCode = StorageStressTests.Run(args)
             Case "all"
@@ -35,6 +40,12 @@ Module Program
 
                 If sqlite <> 0 Then
                     exitCode = sqlite
+                End If
+
+                Dim multiProcess As Integer = StorageMultiProcessTests.Run()
+
+                If multiProcess <> 0 Then
+                    exitCode = multiProcess
                 End If
 
                 Dim stress As Integer = StorageStressTests.Run(args)
@@ -53,11 +64,13 @@ Module Program
     End Sub
 
     Private Sub PrintUsage()
-        Console.WriteLine("usage: test [demo|sqlite|stress|all] [stress options]")
+        Console.WriteLine("usage: test [demo|sqlite|multiprocess|stress|all] [stress options]")
         Console.WriteLine("  demo                  run the jsonl/csv functional demo (default)")
         Console.WriteLine("  sqlite                run the sqlite backend end-to-end tests")
+        Console.WriteLine("  multiprocess          run the multi-process access tests (lock conflict/retry/shared)")
+        Console.WriteLine("  hold --db <dir> --ms  hold the table lock in a child process (internal helper)")
         Console.WriteLine("  stress                run the storage read/write stress test")
-        Console.WriteLine("  all                   run demo, sqlite and stress")
+        Console.WriteLine("  all                   run demo, sqlite, multiprocess and stress")
         Console.WriteLine("stress options:")
         Console.WriteLine("  --size <GB>           target data size (default 2)")
         Console.WriteLine("  --rows <N>            explicit row count (overrides --size)")

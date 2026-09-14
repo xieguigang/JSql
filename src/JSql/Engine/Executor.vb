@@ -870,21 +870,20 @@ Namespace Engine
 
                     If stmt.Target Is Nothing Then
                         rows.AddRange(engine.Catalog.DescribeStorage(db))
+                    ElseIf engine.Catalog.IsLegacyTable(db, stmt.Target) Then
+                        Dim filePath As String = engine.Catalog.FindTableFile(db, stmt.Target)
+                        Dim size As Long = If(filePath IsNot Nothing AndAlso System.IO.File.Exists(filePath), New FileInfo(filePath).Length, 0L)
+
+                        rows.Add(New Object() {stmt.Target, "JSON", -1L, 0L, 0L, size, Path.GetFileName(If(filePath, ""))})
+                    ElseIf engine.Catalog.TableExists(db, stmt.Target) Then
+                        ' 多进程模式下会话可能在语句之间被释放，这里按需重新打开（语句结束再释放）
+                        Dim session As ITableSession = engine.Catalog.OpenSession(db, stmt.Target)
+
+                        rows.Add(New Object() {session.TableName, session.Layout, session.LineCount,
+                                               session.PendingOperations, session.WalFileSize,
+                                               session.DataFileSize, Path.GetFileName(session.DataFilePath)})
                     Else
-                        Dim session As ITableSession = engine.Catalog.TryGetSession(db, stmt.Target)
-
-                        If session IsNot Nothing Then
-                            rows.Add(New Object() {session.TableName, session.Layout, session.LineCount,
-                                                   session.PendingOperations, session.WalFileSize,
-                                                   session.DataFileSize, Path.GetFileName(session.DataFilePath)})
-                        ElseIf engine.Catalog.IsLegacyTable(db, stmt.Target) Then
-                            Dim filePath As String = engine.Catalog.FindTableFile(db, stmt.Target)
-                            Dim size As Long = If(filePath IsNot Nothing AndAlso System.IO.File.Exists(filePath), New FileInfo(filePath).Length, 0L)
-
-                            rows.Add(New Object() {stmt.Target, "JSON", -1L, 0L, 0L, size, Path.GetFileName(If(filePath, ""))})
-                        Else
-                            Throw New SqlError("table " & stmt.Target & " does not exist")
-                        End If
+                        Throw New SqlError("table " & stmt.Target & " does not exist")
                     End If
 
                     Return ResultSet.FromQuery(
@@ -892,10 +891,12 @@ Namespace Engine
 
                 Case Else
                     Dim dbx As String = CurrentDb()
-                    Dim stored As StoredTable = engine.Catalog.LoadTable(dbx, stmt.Target)
+                    ' 只读取表结构：DESCRIBE / SHOW COLUMNS 不需要打开表会话（＝不需要表锁），
+                    ' 从而在多进程环境下不会被另一进程的写锁阻塞
+                    Dim schema As TableSchema = engine.Catalog.LoadSchema(dbx, stmt.Target)
                     Dim rowsx As New List(Of Object())
 
-                    For Each col In stored.Schema.Columns
+                    For Each col In schema.Columns
                         rowsx.Add(New Object() {col.Name, col.TypeName, If(col.NotNull, "NO", "YES"),
                                                 If(col.PrimaryKey, "PRI", ""), If(col.DefaultValue, Nothing),
                                                 If(col.Comment, Nothing)})

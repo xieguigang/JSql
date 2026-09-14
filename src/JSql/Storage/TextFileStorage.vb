@@ -229,6 +229,31 @@ Namespace Storage
         End Function
 
         ''' <summary>
+        ''' 只读取表结构：schema 文件 / 旧版单文件直接读取，不创建会话（＝不获取表锁）。
+        ''' </summary>
+        Public Function LoadSchema(db As String, table As String) As TableSchema Implements IDbFileStorageProvider.LoadSchema
+            Dim dir As String = DatabaseDir(db)
+
+            Select Case ResolveLayout(db, table)
+                Case TableLayout.None
+                    Throw New ArgumentException("table '" & table & "' not found in database '" & db & "'!")
+
+                Case TableLayout.Legacy
+                    Return SchemaStore.ReadLegacy(StorageLayout.LegacyPath(dir, table)).Schema
+
+                Case Else
+                    Dim schemaFilePath As String = StorageLayout.SchemaPath(dir, table)
+
+                    If File.Exists(schemaFilePath) Then
+                        Return SchemaStore.Read(schemaFilePath)
+                    End If
+
+                    ' 没有 schema 文件（例如外部生成的纯数据文件）：回退到会话以获得推断出的结构
+                    Return OpenSession(db, table).Schema
+            End Select
+        End Function
+
+        ''' <summary>
         ''' persist a table. the schema file is written when it changed, the rows are
         ''' synchronized line by line through the write ahead log of the jsonl store.
         ''' </summary>

@@ -48,6 +48,11 @@ dotnet run --project src\Repl\Repl.vbproj -- --db D:\data\jsql --backend sqlite
 | `--fsync` | | 每次写操作都 fsync 日志（慢一些，断电级安全） |
 | `--legacy-json` | | 新建表仍使用旧版单文件 `.json` 布局（便于对比） |
 | `--format <jsonl\|csv>` | `jsonl` | 新建表使用的行存储格式（别名 `--storage`，也支持 `--format=csv`） |
+| `--multiprocess` | 关闭 | 多进程访问模式（别名 `--share`）：每条语句结束即释放表锁，多个进程可交替访问同一数据库 |
+| `--lock-timeout <ms>` | `5000` | 多进程模式下等待表锁的超时（毫秒），超时后报错 |
+| `--lock-fail-fast` | | 多进程模式下锁冲突立即失败，不等待 |
+| `--no-merge-on-release` | | 多进程模式下释放锁时不合并 WAL（写入吞吐优先） |
+| `--lock-mode <exclusive\|shared\|none>` | `exclusive` | 进程级锁模式：`shared` 供只读进程共存，`none` 不加锁 |
 | `--verbose` | | 把存储层诊断（索引重建、撕裂尾修复、checkpoint）打印到 stderr |
 
 ### 3. 第一次使用
@@ -163,6 +168,32 @@ D:\data\jsql\
 - 所有修改先写 WAL，再由底层引擎把挂起修改"虚拟挂载"到读取结果上，因此**写完立刻能读到**
 - **空闲合并（checkpoint）**：引擎空闲超过一段时间（默认 30s）后自动把 WAL 合并回 `*.jsonl` 并清空日志；也可随时手动触发
 - 进程崩溃后重新打开表时会**重放 WAL**，未合并的写入不会丢失
+
+### 多进程访问（`--multiprocess`）
+
+默认情况下，一张表的数据文件在打开期间持有**进程级独占锁**，因此同一个数据库同一时刻只能被一个进程使用。加上 `--multiprocess`（别名 `--share`）后改为**语句级锁**：每条 SQL 语句结束时释放表锁，其它进程即可取得锁执行自己的语句，从而支持多个进程（或多个 JSql 实例）**交替**访问同一个数据库。
+
+```bash
+# 两个终端可以同时使用同一个数据目录
+dotnet run --project src\Repl\Repl.vbproj -- --db D:\data\jsql --multiprocess
+dotnet run --project src\Repl\Repl.vbproj -- --db D:\data\jsql --multiprocess
+```
+
+行为与语义：
+
+- **语句级原子**：单条语句内「取锁 → 读表 → 内存修改 → 写回 → 重建索引」全程持锁，语句之间不持锁；因此同一张表任一时刻仍只有一个写者，也不会出现跨语句的丢失更新
+- **锁冲突策略**：默认等待重试（`--lock-timeout <ms>`，默认 5000ms，超时后给出明确错误）；`--lock-fail-fast` 改为立即失败
+- **释放即合并**：默认在释放锁时把挂起的 WAL 合并回数据文件（`--no-merge-on-release` 可关闭，改为保留在 WAL 中由下次打开重放）；未合并的记录不会丢失
+- **索引缓存失效**：释放锁时会清空查询索引的内存缓存，保证能看到其它进程新写入的行
+- **诊断语句不加锁**：`DESCRIBE` / `SHOW COLUMNS` 直接读取 schema 文件，不需要表锁，因此不会被其它进程的写锁阻塞
+- **锁粒度是表**：锁是每张表一个文件锁，因此不同进程可以同时操作同一个数据库的**不同表**；跨多表语句在极端加锁顺序下可能互相等待，此时由等待超时降级为可读错误
+
+限制：
+
+- 该模式只覆盖文本后端（JSONL / CSV）；`--legacy-json` 单文件整表布局与 `--backend sqlite` 仍不支持多进程
+- 不提供多写并发与冲突检测（仍是「单表单写者」模型）
+- 每次语句结束都会重新打开数据文件并（按需）重放 WAL，写入吞吐低于单进程模式，故默认关闭
+- `--lock-mode shared` 供只读进程共存（多个读者可同时打开，写者与所有读者互斥）；读会话禁止写入
 
 ### 查看与维护
 
@@ -340,7 +371,7 @@ src\Repl\                      # REPL 宿主
 - .NET 10（VB.NET）
 - 项目引用（无需额外安装 NuGet 包）：
   - `GCModeller\src\runtime\Darwinism\src\data\LINQ\LINQ\LINQ.vbproj`：提供 `MemoryIndex`、`TermHashIndex`、`RangeIndex`、`FTSEngine` 等索引算法
-  - `sciBASIC#\Microsoft.VisualBasic.Core`：除基础库外还提供 `Data.Repository.TextLineStore`（与行格式无关的纯文本行存储引擎 + WAL；`JsonlStore` 为其兼容别名）
+  - `sciBASIC#\Microsoft.VisualBasic.Core`：除基础库外还提供 `Data.Repository.TextLineStore`（与行格式无关的纯文本行存储引擎 + WAL；`JsonlStore` 为其兼容别名）；其 `TextStoreOptions` 提供进程级锁模式（独占 / 共享读 / 不加锁）与锁等待超时，用于多进程访问
   - `sciBASIC#\Data\DataFrame`：DataFrame 基础库
   - `sciBASIC#\Data\BinaryData\SQLite3\SQLite3.vbproj`（`src\Sqlite` 引用）：纯托管 SQLite 数据库文件读写引擎（`Sqlite3Writer` / `Sqlite3TableWriter` / `Sqlite3Database`），不依赖原生 sqlite
 
@@ -352,7 +383,7 @@ src\Repl\                      # REPL 宿主
 - `LIKE` 不参与索引加速（全文索引为分词匹配，用于 `LIKE` 可能漏匹配，因此保持全表扫描以保证结果正确）
 - 表级 `UNIQUE KEY` / `KEY` 仅作为 schema 元数据记录，不会自动生成物理索引、也不做唯一性校验；需要索引请用 `CREATE INDEX`
 - `AUTO_INCREMENT` 语法会被接受但不生成自增序号，需自行指定主键值
-- 单进程独占：同一张表的数据文件被打开时持有独占锁，同一个数据库目录同时只能被一个 JSql 实例打开（退出时会自动 checkpoint 并释放锁）
+- 默认**单进程独占**：同一张表的数据文件在打开期间持有独占锁，同一个数据库目录同时只能被一个 JSql 实例打开（退出时会自动 checkpoint 并释放锁）；需要多进程交替访问请加 `--multiprocess`，详见「多进程访问」一节
 - CSV 是**行式**存储：单元格内的换行符在写盘时被规范化为空格（否则会破坏“一行一条记录”的行边界）；CSV 中的空单元格读取为 `NULL`，因此无法区分空字符串与 `NULL`
 - CSV 文件的列顺序以 schema 列序为权威：读取外部 CSV 时按其表头做列名映射（列序可不同），保存时会把表头刷新为 schema 列序
 - 已有表按其数据文件扩展名（`.jsonl` / `.csv`）自动识别，`--format` 只影响**新建表**的默认格式；同一个数据库目录内可以同时存在两种格式的表

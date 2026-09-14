@@ -224,6 +224,49 @@ Namespace Storage
             End Try
         End Sub
 
+        ''' <summary>
+        ''' 释放所有已打开的表会话（＝释放它们的文件锁），使其它进程可以取得锁执行语句。
+        ''' <para>
+        ''' <paramref name="merge"/> = True（默认）时先把待合并的 WAL 合并回数据文件，
+        ''' 让磁盘保持最新并避免下一条语句重放越来越长的日志；False 时只 flush 日志
+        ''' 并释放锁，未合并的记录保留在 WAL 中（下次打开时重放，崩溃恢复语义不变）。
+        ''' </para>
+        ''' <para>
+        ''' 与 <see cref="DisposeAll"/> 不同，本方法可重复调用，池在调用后仍然可用。
+        ''' </para>
+        ''' </summary>
+        Public Sub ReleaseAll(Optional merge As Boolean = True)
+            Dim sessions As List(Of ITableSession) = OpenSessions()
+
+            SyncLock _gate
+                _sessions.Clear()
+            End SyncLock
+
+            For Each session As ITableSession In sessions
+                RemoveHandler session.Info, AddressOf OnSessionInfo
+
+                Try
+                    If merge Then
+                        If session.HasPendingChanges Then
+                            session.Merge()
+                        End If
+                    Else
+                        ' 只保证日志落盘；挂起的修改留给下次打开时重放
+                        session.Flush()
+                    End If
+                Catch ex As Exception
+                    ' 合并/刷盘失败不应阻塞锁的释放：未合并的记录仍保留在 WAL 中，下次打开会重放
+                    RaiseEvent Info("release failed for " & session.TableName & ": " & ex.Message)
+                End Try
+
+                Try
+                    session.Dispose()
+                Catch ex As Exception
+                    RaiseEvent Info("dispose failed for " & session.TableName & ": " & ex.Message)
+                End Try
+            Next
+        End Sub
+
         Public Sub DisposeAll()
             Dim sessions As List(Of ITableSession) = OpenSessions()
 

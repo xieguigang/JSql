@@ -255,6 +255,20 @@ Namespace Indexing
             builtRowCount.Remove(key)
         End Sub
 
+        ''' <summary>
+        ''' 清空全部索引缓存（含从 <c>.idx</c> 归档加载的索引定义与已构建的内存索引），
+        ''' 下次使用时从磁盘重新加载 / 重建。
+        ''' <para>
+        ''' 多进程模式下每条语句结束都会调用：另一进程可能已修改数据并重写 <c>.idx</c>，
+        ''' 若不失效，缓存的索引会产生「漏行」的候选集，从而给出错误结果。
+        ''' </para>
+        ''' </summary>
+        Public Sub InvalidateAll()
+            indexSets.Clear()
+            builtObjects.Clear()
+            builtRowCount.Clear()
+        End Sub
+
         ' ==================== create / drop / rebuild ====================
 
         Public Function CreateIndex(db As String, table As String, stored As StoredTable,

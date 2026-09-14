@@ -61,6 +61,14 @@ Namespace Storage
         ' ==================== 加载 / 保存 ====================
 
         Function LoadTable(db As String, table As String) As StoredTable
+
+        ''' <summary>
+        ''' 只读取表结构，不打开表会话（因此不会获取表级文件锁）。用于 DESCRIBE /
+        ''' SHOW COLUMNS 这类只需要列定义的语句，避免在多进程环境下无谓地等待锁。
+        ''' 表不存在时抛出 <see cref="ArgumentException"/>。
+        ''' </summary>
+        Function LoadSchema(db As String, table As String) As TableSchema
+
         Sub SaveTable(db As String, table As StoredTable)
         Sub DeleteTable(db As String, table As String)
 

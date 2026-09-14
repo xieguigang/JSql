@@ -4,6 +4,7 @@ Imports JSql.Engine
 Imports JSql.Sql
 Imports JSql.Sqlite
 Imports JSql.Storage
+Imports Microsoft.VisualBasic.Data.Repository
 
 Module Program
 
@@ -55,6 +56,16 @@ Module Program
                 Continue For
             End If
 
+            If a.StartsWith("--lock-timeout=", StringComparison.OrdinalIgnoreCase) Then
+                Call ApplyLockTimeout(options, a.Substring("--lock-timeout=".Length))
+                Continue For
+            End If
+
+            If a.StartsWith("--lock-mode=", StringComparison.OrdinalIgnoreCase) Then
+                Call ApplyLockMode(options, a.Substring("--lock-mode=".Length))
+                Continue For
+            End If
+
             Select Case a
                 Case "--fsync"
                     options.FsyncEachWrite = True
@@ -64,6 +75,22 @@ Module Program
                     options.LegacyJson = True
                 Case "--verbose"
                     options.Verbose = True
+                Case "--multiprocess", "--share"
+                    options.MultiProcessAccess = True
+                Case "--lock-fail-fast"
+                    options.LockConflictPolicy = LockConflictPolicy.FailFast
+                Case "--merge-on-release"
+                    options.MergeOnStatementEnd = True
+                Case "--no-merge-on-release"
+                    options.MergeOnStatementEnd = False
+                Case "--lock-timeout"
+                    If i + 1 < args.Length Then
+                        Call ApplyLockTimeout(options, args(i + 1))
+                    End If
+                Case "--lock-mode"
+                    If i + 1 < args.Length Then
+                        Call ApplyLockMode(options, args(i + 1))
+                    End If
                 Case "--format", "--storage"
                     If i + 1 < args.Length Then
                         Call ApplyFormat(options, args(i + 1))
@@ -152,6 +179,27 @@ Module Program
         Return New SqlEngine(root, options)
     End Function
 
+    ''' <summary>--lock-timeout &lt;ms&gt;：多进程模式下等待表锁的超时（毫秒）。</summary>
+    Private Sub ApplyLockTimeout(options As StorageOptions, text As String)
+        Dim ms As Integer = 0
+
+        If Integer.TryParse(If(text, "").Trim(), ms) Then
+            options.LockWaitTimeoutMs = Math.Max(0, ms)
+        End If
+    End Sub
+
+    ''' <summary>--lock-mode exclusive|shared|none：进程级锁模式。</summary>
+    Private Sub ApplyLockMode(options As StorageOptions, text As String)
+        Select Case If(text, "").Trim().ToLowerInvariant()
+            Case "shared", "shared-read", "read", "readonly"
+                options.LockMode = TextStoreLockMode.SharedRead
+            Case "none", "off"
+                options.LockMode = TextStoreLockMode.None
+            Case Else
+                options.LockMode = TextStoreLockMode.Exclusive
+        End Select
+    End Sub
+
     Sub Main(args As String())
         Dim root As String = PickRoot(args)
         Dim options As StorageOptions = ParseOptions(args)
@@ -172,6 +220,14 @@ Module Program
 
             Console.WriteLine("storage: " & options.Format.ToString().ToLowerInvariant() & " + wal (schema .schema.json / data " &
                               dataExt & "), merge after " & options.MergeIdleSeconds & "s idle, fsync=" & options.FsyncEachWrite)
+
+            If options.MultiProcessAccess Then
+                Console.WriteLine("access: multi-process (the table lock is released after each statement; lock conflict: " &
+                                  If(options.LockConflictPolicy = LockConflictPolicy.Wait,
+                                     "wait up to " & options.LockWaitTimeoutMs & "ms",
+                                     "fail fast") &
+                                  "; merge on release=" & options.MergeOnStatementEnd & ")")
+            End If
         End If
 
         Console.WriteLine("type 'help' for the meta commands, 'quit' to leave.")
@@ -410,6 +466,11 @@ Module Program
         Console.WriteLine("  --merge-after <n> | --legacy-json | --verbose")
         Console.WriteLine("  --backend <text|sqlite>   physical storage backend (alias --engine)")
         Console.WriteLine("  --format <jsonl|csv> | --storage <jsonl|csv>   new table row format (text backend)")
+        Console.WriteLine("  --multiprocess            release the table lock after each statement (alias --share)")
+        Console.WriteLine("  --lock-timeout <ms>       wait for a locked table before failing (multi-process, default 5000)")
+        Console.WriteLine("  --lock-fail-fast          fail immediately when the table is locked by another process")
+        Console.WriteLine("  --no-merge-on-release     keep pending wal records instead of merging when the lock is released")
+        Console.WriteLine("  --lock-mode <exclusive|shared|none>   process level lock mode")
 
         If engine IsNot Nothing AndAlso engine.Catalog.CurrentDatabase IsNot Nothing Then
             Console.WriteLine("current database: " & engine.Catalog.CurrentDatabase)

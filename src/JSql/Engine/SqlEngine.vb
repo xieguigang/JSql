@@ -78,7 +78,12 @@ Namespace Engine
             _dataStore = provider
             _indexes = New IndexManager(provider)
             _scheduler = New IdleMergeScheduler(provider.Sessions, Storage)
-            _scheduler.Start()
+
+            If Not Storage.MultiProcessAccess Then
+                ' 多进程模式下每条语句结束即释放锁；后台空闲合并会一直持有会话（＝持有锁），
+                ' 因此必须停用它。数据由「语句结束时的合并」与退出流程保证落盘。
+                _scheduler.Start()
+            End If
         End Sub
 
         ''' <summary>
@@ -95,9 +100,34 @@ Namespace Engine
             Try
                 Return ExecuteStatement(New SqlParser(statementText).ParseStatement())
             Finally
+                ReleaseStatementScope()
                 CheckpointScheduler.ExitBusy()
             End Try
         End Function
+
+        ''' <summary>
+        ''' 结束一次语句作用域。多进程访问模式下释放所有表级文件锁，使其它进程可以
+        ''' 取得锁执行自己的语句；同时失效查询索引的内存缓存，避免另一进程修改数据后
+        ''' 索引候选集漏行。单进程模式下为空操作（行为与旧版一致）。
+        ''' <para>
+        ''' 直接调用 <see cref="ExecuteStatement"/> 的调用方也应在本语句结束后调用本方法。
+        ''' </para>
+        ''' </summary>
+        Public Sub ReleaseStatementScope()
+            If Not Storage.MultiProcessAccess Then
+                Return
+            End If
+
+            Sessions.ReleaseAll(Storage.MergeOnStatementEnd)
+
+            If _indexes IsNot Nothing Then
+                _indexes.InvalidateAll()
+            End If
+
+            If _scheduler IsNot Nothing Then
+                _scheduler.Touch()
+            End If
+        End Sub
 
         Public Function ExecuteStatement(stmt As SqlStatement) As ResultSet
             If TypeOf stmt Is SelectStatement Then
